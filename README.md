@@ -1,2 +1,2 @@
-# etf-rsi-dashboard
-analisar varios ativos, sua tendencia atraves do in dicador RSI
+# Scanner-Intraday-Nasdaq—ações-Diária-dashboard
+analisar varios ativos, sua tendencia atraves do rsi, somente ações do nasdac
