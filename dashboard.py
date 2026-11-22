@@ -53,9 +53,9 @@ RSI_MA_PERIOD = 20
 TIMEZONE_BRT = pytz.timezone("America/Sao_Paulo")
 
 FALLBACK_NASDAQ_TICKERS: Tuple[str, ...] = (
-    "QQQ", "MSFT", "AAPL", "NVDA", "AMZN", "GOOGL", "GOOG", "META", "AVGO", "TSLA",
-    "COST", "ASML", "WMT", "AMD", "PANW", "TXN", "AMAT", "MU", "LRCX", "PLTR",
-    "CSCO", "INTC", "SPCX",
+    "MSFT", "AAPL", "NVDA", "AMZN", "GOOGL", "META", "AVGO", "TSLA", "COST",
+    "ASML", "WMT", "AMD", "PANW", "TXN", "AMAT", "MU", "LRCX", "PLTR", "CSCO",
+    "INTC", "SPCX", "NFLX", "CRWD",
 )
 
 
