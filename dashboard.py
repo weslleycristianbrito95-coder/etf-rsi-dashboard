@@ -1,252 +1,223 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import pytz
-import streamlit as st
 import yfinance as yf
 
-st.set_page_config(
-    page_title="Scanner Intraday RSI(14) vs SMA(14) - ETFs EUA",
-    layout="wide",
-    initial_sidebar_state="expanded",
+RSI_PERIOD = 14
+RSI_MA_PERIOD = 20
+TIMEZONE_BRT = pytz.timezone("America/Sao_Paulo")
+
+DEFAULT_TICKERS: Tuple[str, ...] = (
+    "QQQ", "MSFT", "AAPL", "NVDA", "AMZN", "GOOGL", "GOOG", "META", "AVGO", "TSLA", "COST",
+    "ASML", "WMT", "AMD", "PANW", "TXN", "AMAT", "MU", "LRCX", "PLTR", "CSCO",
+    "INTC", "SPCX",
 )
 
-TICKERS = ["QQQ", "XLK", "SMH", "IGV", "XLC", "XLY", "XLF", "AAPL", "NVDA", "MSFT", "GOOGL", "AMZN", "MU", "AMD", "AUDJPY=X"]
-RSI_PERIOD = 14
-RSI_MA_PERIOD = 14
-TIMEZONE_BRT = pytz.timezone("America/Sao_Paulo")
+
+@dataclass(frozen=True)
+class ScannerConfig:
+    tickers: Tuple[str, ...] = DEFAULT_TICKERS
+    rsi_len: int = RSI_PERIOD
+    ma_len: int = RSI_MA_PERIOD
+    include_extended: bool = False
+    batch_size: int = 50
 
 
 def calculate_rsi_wilder(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
 
-    avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
 
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi = 100 / (1 + rs)
+    rs = avg_gain / avg_loss.replace(0.0, np.nan)
+    rsi = 100.0 - (100.0 / (1.0 + rs))
     return rsi.fillna(50.0)
 
 
-@st.cache_data(ttl=25, show_spinner=False)
-def fetch_and_process_data(
-    tickers: Tuple[str, ...],
-    rsi_len: int,
-    ma_len: int,
-    include_extended: bool,
-) -> Dict[str, pd.DataFrame]:
-    raw = yf.download(
-        tickers=list(tickers),
-        period="5d",
-        interval="5m",
-        group_by="ticker",
-        prepost=include_extended,
-        threads=True,
-        progress=False,
-    )
+def _extract_ticker_df(raw_data: Optional[pd.DataFrame], ticker: str, total_tickers: int) -> pd.DataFrame:
+    if raw_data is None or raw_data.empty:
+        return pd.DataFrame()
+    if total_tickers == 1:
+        return raw_data.copy()
+    if isinstance(raw_data.columns, pd.MultiIndex):
+        lvl0 = raw_data.columns.get_level_values(0)
+        lvl1 = raw_data.columns.get_level_values(-1)
+        if ticker in lvl0:
+            return raw_data[ticker].copy()
+        if ticker in lvl1:
+            return raw_data.xs(ticker, axis=1, level=-1).copy()
+    return pd.DataFrame()
 
+
+def chunk_list(items: List[str], size: int) -> List[List[str]]:
+    if size <= 0:
+        raise ValueError("batch_size deve ser maior que zero.")
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def fetch_and_process_data(config: ScannerConfig) -> Tuple[Dict[str, pd.DataFrame], List[str]]:
+    """
+    Retorna (data_map, warnings).
+    Não engole erros silenciosamente: registra avisos quando um batch ou ticker falha.
+    """
     processed: Dict[str, pd.DataFrame] = {}
+    warnings: List[str] = []
+    ticker_list = [t.strip().upper() for t in config.tickers if t.strip()]
+    batches = chunk_list(ticker_list, config.batch_size)
 
-    for ticker in tickers:
+    for batch in batches:
         try:
-            df = raw[ticker].copy() if len(tickers) > 1 else raw.copy()
-            df = df.dropna(subset=["Close"])
-
-            if df.empty or len(df) < (rsi_len + ma_len + 2):
-                continue
-
-            if df.index.tz is None:
-                df.index = df.index.tz_localize("UTC").tz_convert(TIMEZONE_BRT)
-            else:
-                df.index = df.index.tz_convert(TIMEZONE_BRT)
-
-            df["RSI"] = calculate_rsi_wilder(df["Close"], period=rsi_len)
-            df["RSI_MA"] = df["RSI"].rolling(window=ma_len).mean()
-            df["Spread"] = df["RSI"] - df["RSI_MA"]
-            df["Acima_Media"] = df["RSI"] > df["RSI_MA"]
-
-            processed[ticker] = df
+            raw_daily = yf.download(
+                tickers=batch,
+                period="40d",
+                interval="1d",
+                group_by="ticker",
+                threads=True,
+                progress=False,
+                auto_adjust=False,
+            )
+            raw_intraday = yf.download(
+                tickers=batch,
+                period="5d",
+                interval="15m",
+                group_by="ticker",
+                prepost=config.include_extended,
+                threads=True,
+                progress=False,
+                auto_adjust=False,
+            )
         except Exception as exc:
-            st.warning(f"Erro ao processar {ticker}: {exc}")
-
-    return processed
-
-
-def main() -> None:
-    st.title("Monitor Intraday 5m — RSI(14) vs. Média Móvel(14)")
-
-    with st.sidebar:
-        st.header("Parâmetros")
-        rsi_len = st.number_input("Período RSI", min_value=2, max_value=50, value=RSI_PERIOD)
-        ma_len = st.number_input("Média Móvel no RSI (SMA)", min_value=2, max_value=50, value=RSI_MA_PERIOD)
-        include_extended = st.checkbox("Incluir Pré / After-Market", value=False)
-        auto_refresh = st.checkbox("Auto-atualizar (30s)", value=True)
-        candles_chart = st.slider("Candles visíveis no gráfico", min_value=30, max_value=150, value=78)
-
-        if st.button("Atualizar Agora", use_container_width=True):
-            st.cache_data.clear()
-
-    data_map = fetch_and_process_data(
-        tuple(TICKERS), int(rsi_len), int(ma_len), include_extended
-    )
-
-    if not data_map:
-        st.error("Não foi possível obter dados do Yahoo Finance no momento. Tente novamente em instantes.")
-        return
-
-    summary_rows = []
-    acima_count = 0
-
-    for ticker in TICKERS:
-        df = data_map.get(ticker)
-        if df is None:
+            warnings.append(f"Falha no download do lote {batch[:3]}...: {exc}")
             continue
 
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
+        for ticker in batch:
+            try:
+                df_d = _extract_ticker_df(raw_daily, ticker, len(batch))
+                if df_d.empty or "Close" not in df_d.columns:
+                    warnings.append(f"{ticker}: sem dados diários válidos.")
+                    continue
+                df_d = df_d.dropna(subset=["Close"])
 
-        is_above = bool(last["Acima_Media"])
-        was_above = bool(prev["Acima_Media"])
+                z_score_val = np.nan
+                daily_var_pct = np.nan
 
-        if is_above:
-            acima_count += 1
+                if len(df_d) >= 2:
+                    df_d = df_d.copy()
+                    df_d["Daily_Return_Pct"] = df_d["Close"].pct_change() * 100.0
+                    daily_var_pct = float(df_d["Daily_Return_Pct"].iloc[-1])
 
-        if is_above and not was_above:
-            evento = "CRUZOU PARA CIMA"
-        elif not is_above and was_above:
-            evento = "CRUZOU PARA BAIXO"
+                if len(df_d) >= 21:
+                    rolling_mean = df_d["Daily_Return_Pct"].rolling(20).mean()
+                    rolling_std = df_d["Daily_Return_Pct"].rolling(20).std()
+
+                    latest_ret = df_d["Daily_Return_Pct"].iloc[-1]
+                    l_mean = rolling_mean.iloc[-1]
+                    l_std = rolling_std.iloc[-1]
+
+                    if pd.notna(l_std) and l_std > 0 and pd.notna(latest_ret) and pd.notna(l_mean):
+                        z_score_val = float((latest_ret - l_mean) / l_std)
+
+                df = _extract_ticker_df(raw_intraday, ticker, len(batch))
+                if df.empty or "Close" not in df.columns:
+                    warnings.append(f"{ticker}: sem dados intraday de 15m.")
+                    continue
+                df = df.dropna(subset=["Close"]).copy()
+
+                min_bars = config.rsi_len + config.ma_len + 2
+                if len(df) < min_bars:
+                    warnings.append(f"{ticker}: histórico intraday insuficiente ({len(df)} < {min_bars} candles).")
+                    continue
+
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize("UTC").tz_convert(TIMEZONE_BRT)
+                else:
+                    df.index = df.index.tz_convert(TIMEZONE_BRT)
+
+                df["RSI"] = calculate_rsi_wilder(df["Close"], period=config.rsi_len)
+                df["RSI_MA"] = df["RSI"].rolling(window=config.ma_len).mean()
+                df["Spread"] = df["RSI"] - df["RSI_MA"]
+                df["Acima_Media"] = df["RSI"] > df["RSI_MA"]
+                df["Z_Score_20d"] = z_score_val
+                df["Var_Diaria_Pct"] = daily_var_pct
+
+                processed[ticker] = df
+            except Exception as exc:
+                warnings.append(f"{ticker}: erro ao processar séries ({exc}).")
+
+    return processed, warnings
+
+
+def save_snapshot(data_map: Dict[str, pd.DataFrame], output_path: Path, config: ScannerConfig) -> None:
+    """Salva um snapshot JSON leve para consumo rápido via GitHub App / Actions."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "generated_at_brt": datetime.now(TIMEZONE_BRT).isoformat(),
+        "config": {
+            "rsi_len": config.rsi_len,
+            "ma_len": config.ma_len,
+            "include_extended": config.include_extended,
+        },
+        "tickers": {},
+    }
+    for ticker, df in data_map.items():
+        tail_df = df.tail(160).copy()
+        records = []
+        for idx, row in tail_df.iterrows():
+            records.append(
+                {
+                    "timestamp": idx.isoformat(),
+                    "Close": None if pd.isna(row["Close"]) else float(row["Close"]),
+                    "RSI": None if pd.isna(row["RSI"]) else float(row["RSI"]),
+                    "RSI_MA": None if pd.isna(row["RSI_MA"]) else float(row["RSI_MA"]),
+                    "Spread": None if pd.isna(row["Spread"]) else float(row["Spread"]),
+                    "Acima_Media": bool(row["Acima_Media"]),
+                    "Z_Score_20d": None if pd.isna(row["Z_Score_20d"]) else float(row["Z_Score_20d"]),
+                    "Var_Diaria_Pct": None if pd.isna(row["Var_Diaria_Pct"]) else float(row["Var_Diaria_Pct"]),
+                }
+            )
+        payload["tickers"][ticker] = records
+
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_snapshot(snapshot_path: Path) -> Tuple[Dict[str, pd.DataFrame], Optional[str]]:
+    """Carrega snapshot salvo no repositório, se existir."""
+    if not snapshot_path.exists():
+        return {}, None
+
+    raw = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    generated_at = raw.get("generated_at_brt")
+    result: Dict[str, pd.DataFrame] = {}
+
+    for ticker, rows in raw.get("tickers", {}).items():
+        if not rows:
+            continue
+        df = pd.DataFrame(rows)
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df = df.set_index("timestamp")
+        if df.index.tz is None:
+            df.index = df.index.tz_localize(TIMEZONE_BRT)
         else:
-            evento = "Mantendo tendência"
+            df.index = df.index.tz_convert(TIMEZONE_BRT)
+        result[ticker] = df
 
-        summary_rows.append(
-            {
-                "Ativo": ticker,
-                "Último Candle (BRT)": df.index[-1].strftime("%d/%m %H:%M"),
-                "Preço": round(float(last["Close"]), 2),
-                "RSI (14)": round(float(last["RSI"]), 2),
-                "Média RSI (14)": round(float(last["RSI_MA"]), 2),
-                "Spread (RSI - MA)": round(float(last["Spread"]), 2),
-                "Status": "ACIMA DA MÉDIA" if is_above else "ABAIXO DA MÉDIA",
-                "Sinal Último Candle": evento,
-            }
-        )
-
-    summary_df = pd.DataFrame(summary_rows)
-
-    now_brt = datetime.now(TIMEZONE_BRT).strftime("%H:%M:%S")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Ativos Acima da Média (RSI > SMA)", f"{acima_count} de {len(summary_df)}")
-    col2.metric("Ativos Abaixo da Média (RSI < SMA)", f"{len(summary_df) - acima_count} de {len(summary_df)}")
-    col3.metric("Última Atualização (Brasília)", now_brt)
-
-    def highlight_status(val: str) -> str:
-        if val == "ACIMA DA MÉDIA":
-            return "background-color: rgba(16, 185, 129, 0.25); color: #10b981; font-weight: bold;"
-        if val == "ABAIXO DA MÉDIA":
-            return "background-color: rgba(239, 68, 68, 0.25); color: #ef4444; font-weight: bold;"
-        return ""
-
-    def highlight_event(val: str) -> str:
-        if "CIMA" in val:
-            return "color: #10b981; font-weight: bold;"
-        if "BAIXO" in val:
-            return "color: #ef4444; font-weight: bold;"
-        return "color: #888888;"
-
-    styled_df = (
-        summary_df.style
-        .map(highlight_status, subset=["Status"])
-        .map(highlight_event, subset=["Sinal Último Candle"])
-        .format({
-            "Preço": "${:.2f}",
-            "RSI (14)": "{:.2f}",
-            "Média RSI (14)": "{:.2f}",
-            "Spread (RSI - MA)": "{:+.2f}",
-        })
-    )
-
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
-
-    st.subheader("Curva RSI(14) vs. Média Móvel(14) — Gráfico de 5 Minutos")
-
-    active_tickers = [t for t in TICKERS if t in data_map]
-    num_plots = len(active_tickers)
-    num_cols = 2
-    num_rows = (num_plots + 1) // num_cols
-
-    fig = make_subplots(
-        rows=num_rows,
-        cols=num_cols,
-        subplot_titles=[
-            f"{t} — {'ACIMA' if data_map[t]['Acima_Media'].iloc[-1] else 'ABAIXO'}"
-            for t in active_tickers
-        ],
-        vertical_spacing=0.04,
-        horizontal_spacing=0.06,
-    )
-
-    idx = 0
-    for ticker in active_tickers:
-        row = (idx // num_cols) + 1
-        col = (idx % num_cols) + 1
-        df_plot = data_map[ticker].tail(candles_chart)
-        x_labels = df_plot.index.strftime("%d/%m %H:%M")
-
-        is_above = bool(df_plot["Acima_Media"].iloc[-1])
-        rsi_color = "#10b981" if is_above else "#ef4444"
-
-        fig.add_trace(
-            go.Scatter(
-                x=x_labels,
-                y=df_plot["RSI"],
-                mode="lines",
-                name=f"{ticker} RSI",
-                line=dict(color=rsi_color, width=2),
-                showlegend=False,
-            ),
-            row=row,
-            col=col,
-        )
-
-        fig.add_trace(
-            go.Scatter(
-                x=x_labels,
-                y=df_plot["RSI_MA"],
-                mode="lines",
-                name=f"{ticker} SMA",
-                line=dict(color="#f59e0b", width=1.5, dash="dot"),
-                showlegend=False,
-            ),
-            row=row,
-            col=col,
-        )
-
-        fig.add_hline(y=70, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=row, col=col)
-        fig.add_hline(y=30, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=row, col=col)
-        fig.update_yaxes(range=[10, 90], row=row, col=col)
-        fig.update_xaxes(nticks=6, row=row, col=col)
-
-        idx += 1
-
-    fig.update_layout(
-        height=240 * num_rows,
-        template="plotly_dark",
-        margin=dict(l=20, r=20, t=40, b=20),
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    if auto_refresh:
-        import time
-        time.sleep(30)
-        st.rerun()
+    return result, generated_at
 
 
 if __name__ == "__main__":
-    main()
+    cfg = ScannerConfig()
+    data, warns = fetch_and_process_data(cfg)
+    save_snapshot(data, Path("data/scanner_latest.json"), cfg)
+    print(f"Processados {len(data)} ativos. Avisos: {len(warns)}")
+    for w in warns:
+        print(" -", w)
