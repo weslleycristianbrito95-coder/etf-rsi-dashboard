@@ -280,24 +280,62 @@ def main() -> None:
     total_ativos = len(summary_df)
     now_brt = datetime.now(TIMEZONE_BRT).strftime("%H:%M:%S")
 
-    # Balanço de Tendência
-    st.markdown("### 📊 Balanço de Tendência (RSI de 15m vs Média)")
+    # Cálculo da balança de força (Alta vs. Baixa no RSI)
+    pct_acima = (len(acima_list) / max(total_ativos, 1)) * 100.0
+    pct_abaixo = 100.0 - pct_acima if total_ativos > 0 else 0.0
+    spread_medio = float(summary_df["Spread (RSI - MA)"].mean()) if not summary_df.empty else 0.0
+
+    top_alta = (
+        summary_df[summary_df["Spread (RSI - MA)"] > 0]
+        .sort_values(by="Spread (RSI - MA)", ascending=False)
+        .head(4)["Ativo"]
+        .tolist()
+    )
+    top_baixa = (
+        summary_df[summary_df["Spread (RSI - MA)"] < 0]
+        .sort_values(by="Spread (RSI - MA)", ascending=True)
+        .head(4)["Ativo"]
+        .tolist()
+    )
+
+    st.markdown("### ⚖️ Balança de Força — Alta vs. Baixa no RSI")
+
+    st.markdown(
+        f"""
+        <div style="margin-bottom: 14px;">
+            <div style="display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 6px;">
+                <span style="color: #10b981;">🟢 ALTA (RSI &gt; Média): {len(acima_list)} ({pct_acima:.1f}%)</span>
+                <span style="color: #9ca3af;">Spread Médio: {spread_medio:+.2f}</span>
+                <span style="color: #ef4444;">🔴 BAIXA (RSI &lt; Média): {len(abaixo_list)} ({pct_abaixo:.1f}%)</span>
+            </div>
+            <div style="width: 100%; height: 22px; background-color: rgba(239, 68, 68, 0.35); border-radius: 999px; overflow: hidden; display: flex; border: 1px solid rgba(255,255,255,0.12);">
+                <div style="width: {pct_acima:.1f}%; background: linear-gradient(90deg, #059669, #10b981); transition: width 0.3s ease;"></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     c_up, c_down = st.columns(2)
 
     with c_up:
+        destaque_alta = ", ".join(top_alta) if top_alta else "—"
         st.markdown(
             f"""<div class="trend-card trend-up">
-            <h4 style='color: #10b981; margin: 0;'>🔥 Tendência de Alta: {len(acima_list)} Ativos</h4>
-            <p style='font-size: 1.15rem; font-weight: bold; margin: 8px 0 0 0;'>{', '.join(acima_list) if acima_list else 'Nenhum'}</p>
+            <h4 style='color: #10b981; margin: 0;'>🔥 Pressão de Alta: {len(acima_list)} Ativos ({pct_acima:.1f}%)</h4>
+            <p style='font-size: 0.9rem; color: #d1fae5; margin: 6px 0 4px 0;'><strong>Maior força (Spread +):</strong> {destaque_alta}</p>
+            <p style='font-size: 1.05rem; font-weight: bold; margin: 6px 0 0 0;'>{', '.join(acima_list) if acima_list else 'Nenhum'}</p>
             </div>""",
             unsafe_allow_html=True,
         )
 
     with c_down:
+        destaque_baixa = ", ".join(top_baixa) if top_baixa else "—"
         st.markdown(
             f"""<div class="trend-card trend-down">
-            <h4 style='color: #ef4444; margin: 0;'>❄️ Tendência de Baixa: {len(abaixo_list)} Ativos</h4>
-            <p style='font-size: 1.15rem; font-weight: bold; margin: 8px 0 0 0;'>{', '.join(abaixo_list) if abaixo_list else 'Nenhum'}</p>
+            <h4 style='color: #ef4444; margin: 0;'>❄️ Pressão de Baixa: {len(abaixo_list)} Ativos ({pct_abaixo:.1f}%)</h4>
+            <p style='font-size: 0.9rem; color: #fee2e2; margin: 6px 0 4px 0;'><strong>Maior pressão (Spread -):</strong> {destaque_baixa}</p>
+            <p style='font-size: 1.05rem; font-weight: bold; margin: 6px 0 0 0;'>{', '.join(abaixo_list) if abaixo_list else 'Nenhum'}</p>
             </div>""",
             unsafe_allow_html=True,
         )
@@ -305,7 +343,7 @@ def main() -> None:
     st.markdown("---")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Ações Analisadas", f"{total_ativos}")
-    col2.metric("RSI > SMA (15m)", f"{len(acima_list)} ({(len(acima_list) / max(total_ativos, 1) * 100):.1f}%)")
+    col2.metric("RSI > SMA (15m)", f"{len(acima_list)} ({pct_acima:.1f}%)")
     col3.metric("Variação Diária (Altas/Baixas)", f"{up_daily_count} ↑ / {down_daily_count} ↓")
     col4.metric("Hora da Atualização (BRT)", now_brt)
 
