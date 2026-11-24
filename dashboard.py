@@ -49,7 +49,10 @@ RSI_PERIOD = 14
 RSI_MA_PERIOD = 20
 TIMEZONE_BRT = pytz.timezone("America/Sao_Paulo")
 
-# Tickers únicos combinando Nasdaq-100, S&P 500, SPX, SPY, QQQ e VIX (invertido)
+# Lista solicitada (sem duplicatas):
+# Nasdaq-100: AAPL, NVDA, MSFT, GOOGL, AMZN, MU, AMD
+# S&P 500: AAPL, NVDA, MSFT, GOOGL, AMZN, AVGO, META
+# Índices / ETF / Volatilidade: SPX (^GSPC), SPY, QQQ, VIX (^VIX invertido)
 FALLBACK_NASDAQ_TICKERS: Tuple[str, ...] = (
     "AAPL",
     "NVDA",
@@ -99,13 +102,42 @@ def _extract_ticker_df(raw_data: pd.DataFrame, ticker: str, total_tickers: int) 
     if raw_data is None or raw_data.empty:
         return pd.DataFrame()
     if total_tickers == 1:
-        return raw_data.copy()
+        df_single = raw_data.copy()
+        if isinstance(df_single.columns, pd.MultiIndex):
+            if ticker in df_single.columns.get_level_values(0):
+                return df_single[ticker].copy()
+            if ticker in df_single.columns.get_level_values(-1):
+                return df_single.xs(ticker, axis=1, level=-1).copy()
+            df_single.columns = df_single.columns.get_level_values(0)
+        return df_single
     if isinstance(raw_data.columns, pd.MultiIndex):
         if ticker in raw_data.columns.get_level_values(0):
             return raw_data[ticker].copy()
         if ticker in raw_data.columns.get_level_values(-1):
             return raw_data.xs(ticker, axis=1, level=-1).copy()
     return pd.DataFrame()
+
+
+def _download_single_fallback(
+    ticker: str,
+    interval: str,
+    period: str,
+    include_extended: bool = False,
+) -> pd.DataFrame:
+    try:
+        kwargs = {
+            "tickers": ticker,
+            "period": period,
+            "interval": interval,
+            "threads": False,
+            "progress": False,
+        }
+        if interval != "1d":
+            kwargs["prepost"] = include_extended
+        df_s = yf.download(**kwargs)
+        return _extract_ticker_df(df_s, ticker, total_tickers=1)
+    except Exception:
+        return pd.DataFrame()
 
 
 def chunk_list(items: List[str], size: int) -> List[List[str]]:
@@ -119,24 +151,32 @@ def fetch_and_process_data(
     ma_len: int,
     include_extended: bool,
     batch_size: int = 250,
-) -> Dict[str, pd.DataFrame]:
+) -> Tuple[Dict[str, pd.DataFrame], Dict[str, str]]:
     processed: Dict[str, pd.DataFrame] = {}
+    diagnostics: Dict[str, str] = {}
     ticker_list = list(tickers)
     batches = chunk_list(ticker_list, batch_size)
 
     for batch in batches:
+        raw_daily = pd.DataFrame()
+        raw_intraday = pd.DataFrame()
+
         try:
             raw_daily = yf.download(
                 tickers=batch,
-                period="40d",
+                period="45d",
                 interval="1d",
                 group_by="ticker",
                 threads=True,
                 progress=False,
             )
+        except Exception:
+            pass
+
+        try:
             raw_intraday = yf.download(
                 tickers=batch,
-                period="5d",
+                period="10d",
                 interval="15m",
                 group_by="ticker",
                 prepost=include_extended,
@@ -144,7 +184,7 @@ def fetch_and_process_data(
                 progress=False,
             )
         except Exception:
-            continue
+            pass
 
         for ticker in batch:
             try:
@@ -153,47 +193,61 @@ def fetch_and_process_data(
 
                 df_d = _extract_ticker_df(raw_daily, ticker, len(batch))
                 if df_d.empty or "Close" not in df_d.columns:
-                    continue
-                df_d = df_d.dropna(subset=["Close"])
+                    df_d = _download_single_fallback(ticker, interval="1d", period="45d")
 
                 z_score_val = np.nan
                 daily_var_pct = np.nan
                 z_score_amp = np.nan
 
-                if len(df_d) >= 2:
-                    df_d["Daily_Return_Pct"] = df_d["Close"].pct_change() * 100.0
-                    raw_var = float(df_d["Daily_Return_Pct"].iloc[-1])
-                    daily_var_pct = raw_var * sign if pd.notna(raw_var) else np.nan
+                if not df_d.empty and "Close" in df_d.columns:
+                    df_d = df_d.dropna(subset=["Close"])
 
-                if "High" in df_d.columns and "Low" in df_d.columns:
-                    df_d["Amplitude"] = (df_d["High"] - df_d["Low"]) / df_d["Low"]
+                    if len(df_d) >= 2:
+                        df_d["Daily_Return_Pct"] = df_d["Close"].pct_change() * 100.0
+                        raw_var = float(df_d["Daily_Return_Pct"].iloc[-1])
+                        daily_var_pct = raw_var * sign if pd.notna(raw_var) else np.nan
 
-                if len(df_d) >= 21:
-                    rolling_mean = df_d["Daily_Return_Pct"].rolling(20).mean()
-                    rolling_std = df_d["Daily_Return_Pct"].rolling(20).std()
-                    latest_ret = df_d["Daily_Return_Pct"].iloc[-1]
-                    l_mean = rolling_mean.iloc[-1]
-                    l_std = rolling_std.iloc[-1]
+                    if "High" in df_d.columns and "Low" in df_d.columns:
+                        low_safe = df_d["Low"].replace(0, np.nan)
+                        df_d["Amplitude"] = (df_d["High"] - df_d["Low"]) / low_safe
 
-                    if pd.notna(l_std) and l_std > 0 and pd.notna(latest_ret) and pd.notna(l_mean):
-                        z_score_val = float(((latest_ret - l_mean) / l_std) * sign)
+                    if len(df_d) >= 21:
+                        rolling_mean = df_d["Daily_Return_Pct"].rolling(20).mean()
+                        rolling_std = df_d["Daily_Return_Pct"].rolling(20).std()
+                        latest_ret = df_d["Daily_Return_Pct"].iloc[-1]
+                        l_mean = rolling_mean.iloc[-1]
+                        l_std = rolling_std.iloc[-1]
 
-                    if "Amplitude" in df_d.columns:
-                        amp_mean = df_d["Amplitude"].rolling(20).mean()
-                        amp_std = df_d["Amplitude"].rolling(20).std()
-                        latest_amp = df_d["Amplitude"].iloc[-1]
-                        l_amp_mean = amp_mean.iloc[-1]
-                        l_amp_std = amp_std.iloc[-1]
+                        if pd.notna(l_std) and l_std > 0 and pd.notna(latest_ret) and pd.notna(l_mean):
+                            z_score_val = float(((latest_ret - l_mean) / l_std) * sign)
 
-                        if pd.notna(l_amp_std) and l_amp_std > 0 and pd.notna(latest_amp) and pd.notna(l_amp_mean):
-                            z_score_amp = float(((latest_amp - l_amp_mean) / l_amp_std) * sign)
+                        if "Amplitude" in df_d.columns:
+                            amp_mean = df_d["Amplitude"].rolling(20).mean()
+                            amp_std = df_d["Amplitude"].rolling(20).std()
+                            latest_amp = df_d["Amplitude"].iloc[-1]
+                            l_amp_mean = amp_mean.iloc[-1]
+                            l_amp_std = amp_std.iloc[-1]
+
+                            if pd.notna(l_amp_std) and l_amp_std > 0 and pd.notna(latest_amp) and pd.notna(l_amp_mean):
+                                z_score_amp = float(((latest_amp - l_amp_mean) / l_amp_std) * sign)
 
                 df = _extract_ticker_df(raw_intraday, ticker, len(batch))
                 if df.empty or "Close" not in df.columns:
-                    continue
-                df = df.dropna(subset=["Close"])
+                    df = _download_single_fallback(
+                        ticker,
+                        interval="15m",
+                        period="10d",
+                        include_extended=include_extended,
+                    )
 
-                if len(df) < (rsi_len + ma_len + 2):
+                if df.empty or "Close" not in df.columns:
+                    diagnostics[ticker] = "Sem dados intradiários (15m) retornados pelo Yahoo Finance."
+                    continue
+
+                df = df.dropna(subset=["Close"])
+                min_bars = rsi_len + ma_len + 2
+                if len(df) < min_bars:
+                    diagnostics[ticker] = f"Apenas {len(df)} candles de 15m (mínimo exigido: {min_bars})."
                     continue
 
                 if df.index.tz is None:
@@ -214,10 +268,11 @@ def fetch_and_process_data(
                 df["Var_Diaria_Pct"] = daily_var_pct
 
                 processed[ticker] = df
-            except Exception:
+            except Exception as exc:
+                diagnostics[ticker] = f"Erro ao processar: {exc}"
                 continue
 
-    return processed
+    return processed, diagnostics
 
 
 def main() -> None:
@@ -248,9 +303,13 @@ def main() -> None:
             st.rerun()
 
     with st.spinner("Baixando e calculando indicadores..."):
-        data_map = fetch_and_process_data(
+        data_map, diagnostics = fetch_and_process_data(
             tuple(selected_tickers), int(rsi_len), int(ma_len), include_extended
         )
+
+    if diagnostics:
+        missing_summary = ", ".join(f"{format_ticker_label(k)} ({v})" for k, v in diagnostics.items())
+        st.warning(f"Alguns ativos não entraram na tabela: {missing_summary}")
 
     if not data_map:
         st.error("Não foi possível obter os dados no momento.")
@@ -343,7 +402,7 @@ def main() -> None:
 
     st.markdown("---")
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Ativos Analisados", f"{total_ativos}")
+    col1.metric("Ativos Analisados", f"{total_ativos} / {len(selected_tickers)}")
     col2.metric("RSI > SMA (15m)", f"{len(acima_list)} ({(len(acima_list) / max(total_ativos, 1) * 100):.1f}%)")
     col3.metric("Variação Diária (Altas/Baixas)", f"{up_daily_count} ↑ / {down_daily_count} ↓")
     col4.metric("Hora da Atualização (BRT)", now_brt)
@@ -419,7 +478,7 @@ def main() -> None:
         .map(highlight_pct, subset=["Var. Diária (%)"])
         .format(
             {
-                "Preço": "${:.2f}",
+                "Preço": "\${:.2f}",
                 "Var. Diária (%)": "{:+.2f}%",
                 rsi_col_name: "{:.2f}",
                 ma_col_name: "{:.2f}",
@@ -487,30 +546,4 @@ def main() -> None:
                     y=df_plot["RSI_MA"],
                     mode="lines",
                     name=f"{ticker} SMA",
-                    line=dict(color="#f59e0b", width=1.5, dash="dot"),
-                    showlegend=False,
-                ),
-                row=row,
-                col=col,
-            )
-
-            fig.add_hline(y=70, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=row, col=col)
-            fig.add_hline(y=30, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=row, col=col)
-            fig.update_yaxes(range=[10, 90], row=row, col=col)
-            fig.update_xaxes(nticks=6, row=row, col=col)
-
-        fig.update_layout(
-            height=240 * num_rows,
-            template="plotly_dark",
-            margin=dict(l=20, r=20, t=40, b=20),
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    if auto_refresh:
-        time.sleep(60)
-        st.rerun()
-
-
-if __name__ == "__main__":
-    main()
+                    line=dict(color="#f59e0b", width=1.5,
