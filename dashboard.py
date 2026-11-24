@@ -69,15 +69,22 @@ FALLBACK_NASDAQ_TICKERS: Tuple[str, ...] = (
     "^VIX",
 )
 
-INVERTED_TICKERS = {"^VIX"}
+INVERTED_TICKERS = {"^VIX", "VIXY"}
+INTRADAY_FALLBACK_MAP: Dict[str, str] = {
+    "^GSPC": "SPY",
+    "^VIX": "VIXY",
+}
 TICKER_LABELS: Dict[str, str] = {
     "^GSPC": "SPX (^GSPC)",
     "^VIX": "VIX INV (^VIX)",
 }
 
 
-def format_ticker_label(ticker: str) -> str:
-    return TICKER_LABELS.get(ticker, ticker)
+def format_ticker_label(ticker: str, used_fallback: str = "") -> str:
+    base = TICKER_LABELS.get(ticker, ticker)
+    if used_fallback:
+        return f"{base} [via {used_fallback}]"
+    return base
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -86,47 +93,85 @@ def get_all_nasdaq_stocks(exclude_etfs: bool = False, clean_symbols_only: bool =
 
 
 def calculate_rsi_wilder(series: pd.Series, period: int = 14) -> pd.Series:
+    if len(series) < 2:
+        return pd.Series([50.0] * len(series), index=series.index)
+
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
-    avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    eff_period = min(period, max(1, len(series) - 1))
+    avg_gain = gain.ewm(alpha=1 / eff_period, min_periods=1, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / eff_period, min_periods=1, adjust=False).mean()
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
     return rsi.fillna(50.0)
 
 
+def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    out = df.copy()
+    if isinstance(out.columns, pd.MultiIndex):
+        # Tenta localizar nomes OHLCV em qualquer nível
+        ohlcv_names = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
+        found_cols = {}
+        for col in out.columns:
+            parts = [str(p) for p in col]
+            for name in ("Close", "Open", "High", "Low", "Volume"):
+                if name in parts and name not in found_cols:
+                    found_cols[name] = col
+        if "Close" in found_cols:
+            out = pd.DataFrame({k: out[v] for k, v in found_cols.items()}, index=out.index)
+        else:
+            out.columns = out.columns.get_level_values(0)
+
+    # Garante colunas numéricas e remove duplicatas de coluna
+    out = out.loc[:, ~out.columns.duplicated()]
+    for col in ("Open", "High", "Low", "Close", "Volume"):
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+
+    if "Close" not in out.columns:
+        return pd.DataFrame()
+
+    return out.dropna(subset=["Close"])
+
+
 def _extract_ticker_df(raw_data: pd.DataFrame, ticker: str, total_tickers: int) -> pd.DataFrame:
     if raw_data is None or raw_data.empty:
         return pd.DataFrame()
+
     if total_tickers == 1:
-        df_single = raw_data.copy()
-        if isinstance(df_single.columns, pd.MultiIndex):
-            if ticker in df_single.columns.get_level_values(0):
-                return df_single[ticker].copy()
-            if ticker in df_single.columns.get_level_values(-1):
-                return df_single.xs(ticker, axis=1, level=-1).copy()
-            df_single.columns = df_single.columns.get_level_values(0)
-        return df_single
+        if isinstance(raw_data.columns, pd.MultiIndex):
+            for lvl in range(raw_data.columns.nlevels):
+                vals = raw_data.columns.get_level_values(lvl)
+                if ticker in vals:
+                    sub = raw_data.xs(ticker, axis=1, level=lvl)
+                    return _normalize_ohlcv(sub)
+        return _normalize_ohlcv(raw_data)
+
     if isinstance(raw_data.columns, pd.MultiIndex):
-        if ticker in raw_data.columns.get_level_values(0):
-            return raw_data[ticker].copy()
-        if ticker in raw_data.columns.get_level_values(-1):
-            return raw_data.xs(ticker, axis=1, level=-1).copy()
+        for lvl in range(raw_data.columns.nlevels):
+            vals = raw_data.columns.get_level_values(lvl)
+            if ticker in vals:
+                sub = raw_data.xs(ticker, axis=1, level=lvl)
+                return _normalize_ohlcv(sub)
+
     return pd.DataFrame()
 
 
-def _download_single_fallback(
-    ticker: str,
+def _download_single_safe(
+    symbol: str,
     interval: str,
     period: str,
     include_extended: bool = False,
 ) -> pd.DataFrame:
     try:
         kwargs = {
-            "tickers": ticker,
+            "tickers": symbol,
             "period": period,
             "interval": interval,
             "threads": False,
@@ -135,7 +180,7 @@ def _download_single_fallback(
         if interval != "1d":
             kwargs["prepost"] = include_extended
         df_s = yf.download(**kwargs)
-        return _extract_ticker_df(df_s, ticker, total_tickers=1)
+        return _extract_ticker_df(df_s, symbol, total_tickers=1)
     except Exception:
         return pd.DataFrame()
 
@@ -164,7 +209,7 @@ def fetch_and_process_data(
         try:
             raw_daily = yf.download(
                 tickers=batch,
-                period="45d",
+                period="60d",
                 interval="1d",
                 group_by="ticker",
                 threads=True,
@@ -176,7 +221,7 @@ def fetch_and_process_data(
         try:
             raw_intraday = yf.download(
                 tickers=batch,
-                period="10d",
+                period="1mo",
                 interval="15m",
                 group_by="ticker",
                 prepost=include_extended,
@@ -188,24 +233,28 @@ def fetch_and_process_data(
 
         for ticker in batch:
             try:
-                is_inverted = ticker in INVERTED_TICKERS
-                sign = -1.0 if is_inverted else 1.0
-
+                used_fallback = ""
                 df_d = _extract_ticker_df(raw_daily, ticker, len(batch))
-                if df_d.empty or "Close" not in df_d.columns:
-                    df_d = _download_single_fallback(ticker, interval="1d", period="45d")
+                if df_d.empty:
+                    df_d = _download_single_safe(ticker, interval="1d", period="60d")
+
+                if df_d.empty and ticker in INTRADAY_FALLBACK_MAP:
+                    fb_sym = INTRADAY_FALLBACK_MAP[ticker]
+                    df_d = _download_single_safe(fb_sym, interval="1d", period="60d")
+                    if not df_d.empty:
+                        used_fallback = fb_sym
+
+                is_inverted = (ticker in INVERTED_TICKERS) or (used_fallback in INVERTED_TICKERS)
+                sign = -1.0 if is_inverted else 1.0
 
                 z_score_val = np.nan
                 daily_var_pct = np.nan
                 z_score_amp = np.nan
 
-                if not df_d.empty and "Close" in df_d.columns:
-                    df_d = df_d.dropna(subset=["Close"])
-
-                    if len(df_d) >= 2:
-                        df_d["Daily_Return_Pct"] = df_d["Close"].pct_change() * 100.0
-                        raw_var = float(df_d["Daily_Return_Pct"].iloc[-1])
-                        daily_var_pct = raw_var * sign if pd.notna(raw_var) else np.nan
+                if not df_d.empty and len(df_d) >= 2:
+                    df_d["Daily_Return_Pct"] = df_d["Close"].pct_change() * 100.0
+                    raw_var = float(df_d["Daily_Return_Pct"].iloc[-1])
+                    daily_var_pct = raw_var * sign if pd.notna(raw_var) else np.nan
 
                     if "High" in df_d.columns and "Low" in df_d.columns:
                         low_safe = df_d["Low"].replace(0, np.nan)
@@ -232,22 +281,27 @@ def fetch_and_process_data(
                                 z_score_amp = float(((latest_amp - l_amp_mean) / l_amp_std) * sign)
 
                 df = _extract_ticker_df(raw_intraday, ticker, len(batch))
-                if df.empty or "Close" not in df.columns:
-                    df = _download_single_fallback(
+                if df.empty:
+                    df = _download_single_safe(
                         ticker,
                         interval="15m",
-                        period="10d",
+                        period="1mo",
                         include_extended=include_extended,
                     )
 
-                if df.empty or "Close" not in df.columns:
-                    diagnostics[ticker] = "Sem dados intradiários (15m) retornados pelo Yahoo Finance."
-                    continue
+                if df.empty and ticker in INTRADAY_FALLBACK_MAP:
+                    fb_sym = INTRADAY_FALLBACK_MAP[ticker]
+                    df = _download_single_safe(
+                        fb_sym,
+                        interval="15m",
+                        period="1mo",
+                        include_extended=include_extended,
+                    )
+                    if not df.empty:
+                        used_fallback = fb_sym
 
-                df = df.dropna(subset=["Close"])
-                min_bars = rsi_len + ma_len + 2
-                if len(df) < min_bars:
-                    diagnostics[ticker] = f"Apenas {len(df)} candles de 15m (mínimo exigido: {min_bars})."
+                if df.empty or len(df) < 2:
+                    diagnostics[ticker] = "Sem dados suficientes de 15m no Yahoo Finance."
                     continue
 
                 if df.index.tz is None:
@@ -260,12 +314,16 @@ def fetch_and_process_data(
                     rsi_series = 100.0 - rsi_series
 
                 df["RSI"] = rsi_series
-                df["RSI_MA"] = df["RSI"].rolling(window=ma_len).mean()
+                df["RSI_MA"] = df["RSI"].rolling(window=ma_len, min_periods=1).mean()
                 df["Spread"] = df["RSI"] - df["RSI_MA"]
                 df["Acima_Media"] = df["RSI"] > df["RSI_MA"]
                 df["Z_Score_20d"] = z_score_val
                 df["Z_Score_Amp_20d"] = z_score_amp
                 df["Var_Diaria_Pct"] = daily_var_pct
+                df.attrs["used_fallback"] = used_fallback
+
+                if used_fallback:
+                    diagnostics[ticker] = f"Usando substituto {used_fallback} por indisponibilidade direta de {ticker}."
 
                 processed[ticker] = df
             except Exception as exc:
@@ -308,8 +366,8 @@ def main() -> None:
         )
 
     if diagnostics:
-        missing_summary = ", ".join(f"{format_ticker_label(k)} ({v})" for k, v in diagnostics.items())
-        st.warning(f"Alguns ativos não entraram na tabela: {missing_summary}")
+        diag_text = " | ".join(f"{format_ticker_label(k)}: {v}" for k, v in diagnostics.items())
+        st.info(f" Diagnóstico de dados: {diag_text}")
 
     if not data_map:
         st.error("Não foi possível obter os dados no momento.")
@@ -329,7 +387,8 @@ def main() -> None:
         if df is None or len(df) < 2:
             continue
 
-        display_name = format_ticker_label(ticker)
+        used_fb = df.attrs.get("used_fallback", "")
+        display_name = format_ticker_label(ticker, used_fb)
         last = df.iloc[-1]
         prev = df.iloc[-2]
 
@@ -478,7 +537,7 @@ def main() -> None:
         .map(highlight_pct, subset=["Var. Diária (%)"])
         .format(
             {
-                "Preço": "\${:.2f}",
+                "Preço": "${:.2f}",
                 "Var. Diária (%)": "{:+.2f}%",
                 rsi_col_name: "{:.2f}",
                 ma_col_name: "{:.2f}",
@@ -504,11 +563,12 @@ def main() -> None:
 
         subplot_titles_list = []
         for t in active_tickers:
+            used_fb = data_map[t].attrs.get("used_fallback", "")
             is_abv = bool(data_map[t]["Acima_Media"].iloc[-1])
             z_t = data_map[t]["Z_Score_20d"].iloc[-1]
             z_str = f"Z: {z_t:+.2f}" if pd.notna(z_t) else "Z: -"
             label = "ACIMA" if is_abv else "ABAIXO"
-            subplot_titles_list.append(f"{format_ticker_label(t)} — {label} ({z_str})")
+            subplot_titles_list.append(f"{format_ticker_label(t, used_fb)} — {label} ({z_str})")
 
         fig = make_subplots(
             rows=num_rows,
@@ -546,4 +606,30 @@ def main() -> None:
                     y=df_plot["RSI_MA"],
                     mode="lines",
                     name=f"{ticker} SMA",
-                    line=dict(color="#f59e0b", width=1.5,
+                    line=dict(color="#f59e0b", width=1.5, dash="dot"),
+                    showlegend=False,
+                ),
+                row=row,
+                col=col,
+            )
+
+            fig.add_hline(y=70, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=row, col=col)
+            fig.add_hline(y=30, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=row, col=col)
+            fig.update_yaxes(range=[10, 90], row=row, col=col)
+            fig.update_xaxes(nticks=6, row=row, col=col)
+
+        fig.update_layout(
+            height=240 * num_rows,
+            template="plotly_dark",
+            margin=dict(l=20, r=20, t=40, b=20),
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    if auto_refresh:
+        time.sleep(60)
+        st.rerun()
+
+
+if __name__ == "__main__":
+    main()
