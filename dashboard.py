@@ -11,8 +11,7 @@ import streamlit as st
 import yfinance as yf
 
 st.set_page_config(
-    page_title="Scanner Intraday Nasdaq & S&P 500",
-    page_icon="📈",
+    page_title="Scanner Intraday Nasdaq — RSI & Variação Diária",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -20,153 +19,26 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
-
-    html, body, [class*="css"] {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    [data-testid="stMetricValue"] {
+        font-size: 1.4rem !important;
+        font-weight: 700 !important;
     }
-
-    .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 2rem;
+    [data-testid="stMetricLabel"] {
+        font-size: 0.9rem !important;
     }
-
-    .header-banner {
-        background: linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.85) 100%);
-        border: 1px solid rgba(148, 163, 184, 0.16);
-        border-radius: 12px;
-        padding: 18px 22px;
-        margin-bottom: 18px;
+    .trend-card {
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+        border: 1px solid rgba(255,255,255,0.1);
     }
-
-    .header-title {
-        font-size: 1.55rem;
-        font-weight: 700;
-        letter-spacing: -0.02em;
-        color: #f8fafc;
-        margin: 0;
+    .trend-up {
+        background-color: rgba(16, 185, 129, 0.1);
+        border-left: 5px solid #10b981;
     }
-
-    .header-subtitle {
-        font-size: 0.88rem;
-        color: #94a3b8;
-        margin: 4px 0 0 0;
-    }
-
-    .kpi-card {
-        background: rgba(15, 23, 42, 0.72);
-        border: 1px solid rgba(148, 163, 184, 0.15);
-        border-radius: 10px;
-        padding: 14px 16px;
-    }
-
-    .kpi-label {
-        font-size: 0.78rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: #94a3b8;
-        margin-bottom: 4px;
-    }
-
-    .kpi-value {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 1.4rem;
-        font-weight: 700;
-        color: #f8fafc;
-    }
-
-    .kpi-sub {
-        font-size: 0.78rem;
-        color: #64748b;
-        margin-top: 2px;
-    }
-
-    .trend-panel {
-        border-radius: 12px;
-        padding: 16px 18px;
-        border: 1px solid rgba(148, 163, 184, 0.14);
-        background: rgba(15, 23, 42, 0.65);
-        height: 100%;
-    }
-
-    .trend-panel-bull {
-        border-top: 3px solid #10b981;
-        background: linear-gradient(180deg, rgba(16, 185, 129, 0.09) 0%, rgba(15, 23, 42, 0.7) 100%);
-    }
-
-    .trend-panel-bear {
-        border-top: 3px solid #ef4444;
-        background: linear-gradient(180deg, rgba(239, 68, 68, 0.09) 0%, rgba(15, 23, 42, 0.7) 100%);
-    }
-
-    .trend-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 10px;
-    }
-
-    .trend-title-bull {
-        color: #34d399;
-        font-weight: 700;
-        font-size: 1rem;
-    }
-
-    .trend-title-bear {
-        color: #f87171;
-        font-weight: 700;
-        font-size: 1rem;
-    }
-
-    .badge-count {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.82rem;
-        font-weight: 700;
-        padding: 3px 9px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.08);
-        color: #e2e8f0;
-    }
-
-    .ticker-chip-wrap {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin-top: 6px;
-    }
-
-    .chip-bull {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.78rem;
-        font-weight: 600;
-        padding: 4px 8px;
-        border-radius: 6px;
-        background: rgba(16, 185, 129, 0.16);
-        color: #6ee7b7;
-        border: 1px solid rgba(16, 185, 129, 0.35);
-    }
-
-    .chip-bear {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.78rem;
-        font-weight: 600;
-        padding: 4px 8px;
-        border-radius: 6px;
-        background: rgba(239, 68, 68, 0.16);
-        color: #fca5a5;
-        border: 1px solid rgba(239, 68, 68, 0.35);
-    }
-
-    .chip-empty {
-        font-size: 0.85rem;
-        color: #64748b;
-        font-style: italic;
-    }
-
-    .section-divider {
-        height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.22), transparent);
-        margin: 18px 0;
+    .trend-down {
+        background-color: rgba(239, 68, 68, 0.1);
+        border-left: 5px solid #ef4444;
     }
     </style>
     """,
@@ -177,18 +49,32 @@ RSI_PERIOD = 14
 RSI_MA_PERIOD = 20
 TIMEZONE_BRT = pytz.timezone("America/Sao_Paulo")
 
-# Universo consolidado: Top Nasdaq-100 + Top S&P 500 + SPX, SPY, QQQ, ^VIX
+# Tickers únicos combinando Nasdaq-100, S&P 500, SPX, SPY, QQQ e VIX (invertido)
 FALLBACK_NASDAQ_TICKERS: Tuple[str, ...] = (
-    "AAPL", "NVDA", "MSFT", "GOOGL", "AMZN", "MU", "AMD",
-    "AVGO", "META",
-    "SPX", "SPY", "QQQ", "^VIX"
+    "AAPL",
+    "NVDA",
+    "MSFT",
+    "GOOGL",
+    "AMZN",
+    "MU",
+    "AMD",
+    "AVGO",
+    "META",
+    "QQQ",
+    "SPY",
+    "^GSPC",
+    "^VIX",
 )
 
-TICKER_TO_YF: Dict[str, str] = {
-    "SPX": "^GSPC",
+INVERTED_TICKERS = {"^VIX"}
+TICKER_LABELS: Dict[str, str] = {
+    "^GSPC": "SPX (^GSPC)",
+    "^VIX": "VIX INV (^VIX)",
 }
 
-INVERTED_TICKERS = {"^VIX"}
+
+def format_ticker_label(ticker: str) -> str:
+    return TICKER_LABELS.get(ticker, ticker)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -209,16 +95,16 @@ def calculate_rsi_wilder(series: pd.Series, period: int = 14) -> pd.Series:
     return rsi.fillna(50.0)
 
 
-def _extract_ticker_df(raw_data: pd.DataFrame, yf_symbol: str, total_tickers: int) -> pd.DataFrame:
+def _extract_ticker_df(raw_data: pd.DataFrame, ticker: str, total_tickers: int) -> pd.DataFrame:
     if raw_data is None or raw_data.empty:
         return pd.DataFrame()
     if total_tickers == 1:
         return raw_data.copy()
     if isinstance(raw_data.columns, pd.MultiIndex):
-        if yf_symbol in raw_data.columns.get_level_values(0):
-            return raw_data[yf_symbol].copy()
-        if yf_symbol in raw_data.columns.get_level_values(-1):
-            return raw_data.xs(yf_symbol, axis=1, level=-1).copy()
+        if ticker in raw_data.columns.get_level_values(0):
+            return raw_data[ticker].copy()
+        if ticker in raw_data.columns.get_level_values(-1):
+            return raw_data.xs(ticker, axis=1, level=-1).copy()
     return pd.DataFrame()
 
 
@@ -239,10 +125,9 @@ def fetch_and_process_data(
     batches = chunk_list(ticker_list, batch_size)
 
     for batch in batches:
-        yf_batch = [TICKER_TO_YF.get(t, t) for t in batch]
         try:
             raw_daily = yf.download(
-                tickers=yf_batch,
+                tickers=batch,
                 period="40d",
                 interval="1d",
                 group_by="ticker",
@@ -250,7 +135,7 @@ def fetch_and_process_data(
                 progress=False,
             )
             raw_intraday = yf.download(
-                tickers=yf_batch,
+                tickers=batch,
                 period="5d",
                 interval="15m",
                 group_by="ticker",
@@ -262,11 +147,11 @@ def fetch_and_process_data(
             continue
 
         for ticker in batch:
-            yf_symbol = TICKER_TO_YF.get(ticker, ticker)
-            is_inverted = ticker in INVERTED_TICKERS
-
             try:
-                df_d = _extract_ticker_df(raw_daily, yf_symbol, len(yf_batch))
+                is_inverted = ticker in INVERTED_TICKERS
+                sign = -1.0 if is_inverted else 1.0
+
+                df_d = _extract_ticker_df(raw_daily, ticker, len(batch))
                 if df_d.empty or "Close" not in df_d.columns:
                     continue
                 df_d = df_d.dropna(subset=["Close"])
@@ -277,7 +162,8 @@ def fetch_and_process_data(
 
                 if len(df_d) >= 2:
                     df_d["Daily_Return_Pct"] = df_d["Close"].pct_change() * 100.0
-                    daily_var_pct = float(df_d["Daily_Return_Pct"].iloc[-1])
+                    raw_var = float(df_d["Daily_Return_Pct"].iloc[-1])
+                    daily_var_pct = raw_var * sign if pd.notna(raw_var) else np.nan
 
                 if "High" in df_d.columns and "Low" in df_d.columns:
                     df_d["Amplitude"] = (df_d["High"] - df_d["Low"]) / df_d["Low"]
@@ -290,7 +176,7 @@ def fetch_and_process_data(
                     l_std = rolling_std.iloc[-1]
 
                     if pd.notna(l_std) and l_std > 0 and pd.notna(latest_ret) and pd.notna(l_mean):
-                        z_score_val = float((latest_ret - l_mean) / l_std)
+                        z_score_val = float(((latest_ret - l_mean) / l_std) * sign)
 
                     if "Amplitude" in df_d.columns:
                         amp_mean = df_d["Amplitude"].rolling(20).mean()
@@ -300,9 +186,9 @@ def fetch_and_process_data(
                         l_amp_std = amp_std.iloc[-1]
 
                         if pd.notna(l_amp_std) and l_amp_std > 0 and pd.notna(latest_amp) and pd.notna(l_amp_mean):
-                            z_score_amp = float((latest_amp - l_amp_mean) / l_amp_std)
+                            z_score_amp = float(((latest_amp - l_amp_mean) / l_amp_std) * sign)
 
-                df = _extract_ticker_df(raw_intraday, yf_symbol, len(yf_batch))
+                df = _extract_ticker_df(raw_intraday, ticker, len(batch))
                 if df.empty or "Close" not in df.columns:
                     continue
                 df = df.dropna(subset=["Close"])
@@ -316,11 +202,13 @@ def fetch_and_process_data(
                     df.index = df.index.tz_convert(TIMEZONE_BRT)
 
                 rsi_series = calculate_rsi_wilder(df["Close"], period=rsi_len)
+                if is_inverted:
+                    rsi_series = 100.0 - rsi_series
+
                 df["RSI"] = rsi_series
                 df["RSI_MA"] = df["RSI"].rolling(window=ma_len).mean()
-                raw_spread = df["RSI"] - df["RSI_MA"]
-                df["Spread"] = -raw_spread if is_inverted else raw_spread
-                df["Acima_Media"] = (df["RSI"] < df["RSI_MA"]) if is_inverted else (df["RSI"] > df["RSI_MA"])
+                df["Spread"] = df["RSI"] - df["RSI_MA"]
+                df["Acima_Media"] = df["RSI"] > df["RSI_MA"]
                 df["Z_Score_20d"] = z_score_val
                 df["Z_Score_Amp_20d"] = z_score_amp
                 df["Var_Diaria_Pct"] = daily_var_pct
@@ -332,59 +220,40 @@ def fetch_and_process_data(
     return processed
 
 
-def render_chips(tickers: List[str], chip_class: str, empty_text: str = "Nenhum ativo no momento") -> str:
-    if not tickers:
-        return f"<div class='chip-empty'>{empty_text}</div>"
-    chips_html = "".join([f"<span class='{chip_class}'>{t}</span>" for t in tickers])
-    return f"<div class='ticker-chip-wrap'>{chips_html}</div>"
-
-
 def main() -> None:
-    now_brt = datetime.now(TIMEZONE_BRT).strftime("%d/%m/%Y · %H:%M:%S BRT")
-
-    st.markdown(
-        f"""
-        <div class="header-banner">
-            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-                <div>
-                    <h1 class="header-title">Scanner Intraday · Nasdaq-100 & S&P 500</h1>
-                    <p class="header-subtitle">Momentum RSI (15m) vs. Média Móvel · Expansão Diária & Z-Score 20D · VIX Invertido</p>
-                </div>
-                <span class="badge-count">🕒 {now_brt}</span>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.title("SCANNER PORTFÓLIO NASDAQ / S&P 500 — CONFIGURAÇÃO")
 
     all_nasdaq = get_all_nasdaq_stocks()
 
     with st.sidebar:
-        st.markdown("### 🎯 Universo & Controles")
-        st.caption("Top NDX + Top SPX + SPX, SPY, QQQ, ^VIX (invertido)")
+        st.header("Universo Escolhido")
+        st.radio(
+            "Seleção de ativos",
+            options=["Lista Personalizada"],
+            index=0,
+        )
+
         selected_tickers = all_nasdaq
 
-        st.markdown("### ⚙️ Parâmetros Técnicos")
+        st.header("Parâmetros Técnicos")
         rsi_len = st.number_input("Período RSI", min_value=2, max_value=50, value=RSI_PERIOD)
         ma_len = st.number_input("Média Móvel no RSI (SMA)", min_value=2, max_value=50, value=RSI_MA_PERIOD)
         include_extended = st.checkbox("Incluir Pré / After-Market", value=False)
         auto_refresh = st.checkbox("Auto-atualizar (60s)", value=False)
+        candles_chart = st.slider("Candles visíveis no gráfico", min_value=30, max_value=150, value=78)
+        max_charts = st.slider("Máx. gráficos 15m renderizados", min_value=4, max_value=60, value=20)
 
-        st.markdown("### 📊 Visualização")
-        candles_chart = st.slider("Candles no gráfico 15m", min_value=30, max_value=150, value=78)
-        max_charts = st.slider("Máx. gráficos renderizados", min_value=4, max_value=24, value=14)
-
-        if st.button("🔄 Atualizar Dados Agora", use_container_width=True):
+        if st.button("Atualizar Agora", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 
-    with st.spinner("Sincronizando cotações e calculando indicadores..."):
+    with st.spinner("Baixando e calculando indicadores..."):
         data_map = fetch_and_process_data(
             tuple(selected_tickers), int(rsi_len), int(ma_len), include_extended
         )
 
     if not data_map:
-        st.error("Não foi possível obter os dados no momento. Tente atualizar novamente.")
+        st.error("Não foi possível obter os dados no momento.")
         return
 
     summary_rows = []
@@ -394,21 +263,19 @@ def main() -> None:
     down_daily_count = 0
 
     rsi_col_name = f"RSI ({rsi_len})"
-    ma_col_name = f"SMA RSI ({ma_len})"
+    ma_col_name = f"Média RSI ({ma_len})"
 
     for ticker in selected_tickers:
         df = data_map.get(ticker)
         if df is None or len(df) < 2:
             continue
 
+        display_name = format_ticker_label(ticker)
         last = df.iloc[-1]
         prev = df.iloc[-2]
 
         is_above = bool(last["Acima_Media"])
         was_above = bool(prev["Acima_Media"])
-        is_inverted = ticker in INVERTED_TICKERS
-
-        display_name = f"{ticker} (Inv)" if is_inverted else ticker
 
         if is_above:
             acima_list.append(display_name)
@@ -420,285 +287,225 @@ def main() -> None:
         var_diaria = float(last["Var_Diaria_Pct"]) if pd.notna(last["Var_Diaria_Pct"]) else np.nan
 
         if pd.notna(var_diaria):
-            efetiva_var = -var_diaria if is_inverted else var_diaria
-            if efetiva_var > 0:
+            if var_diaria > 0:
                 up_daily_count += 1
-            elif efetiva_var < 0:
+            elif var_diaria < 0:
                 down_daily_count += 1
 
         if is_above and not was_above:
-            evento = "▲ Cruzou Alta"
+            evento = "CRUZOU PARA CIMA"
         elif not is_above and was_above:
-            evento = "▼ Cruzou Baixa"
+            evento = "CRUZOU PARA BAIXO"
         else:
-            evento = "Em tendência"
+            evento = "Mantendo tendência"
 
         summary_rows.append(
             {
                 "Ativo": display_name,
-                "Candle": df.index[-1].strftime("%d/%m %H:%M"),
+                "_raw_ticker": ticker,
+                "Último Candle": df.index[-1].strftime("%d/%m %H:%M"),
                 "Preço": round(float(last["Close"]), 2),
                 "Var. Diária (%)": var_diaria,
                 rsi_col_name: round(float(last["RSI"]), 2),
                 ma_col_name: round(float(last["RSI_MA"]), 2),
-                "Spread Dir.": round(float(last["Spread"]), 2),
-                "Z-Score Ret. (20d)": z_val,
-                "Z-Score Amp. (20d)": z_amp_val,
-                "Direção Sinal": "ALTA" if is_above else "BAIXA",
-                "Evento": evento,
+                "Spread (RSI - MA)": round(float(last["Spread"]), 2),
+                "Z-Score (20d)": z_val,
+                "Z-Score Amp (20d)": z_amp_val,
+                "Status": "ACIMA DA MÉDIA" if is_above else "ABAIXO DA MÉDIA",
+                "Sinal Último Candle": evento,
             }
         )
 
     summary_df = pd.DataFrame(summary_rows)
     total_ativos = len(summary_df)
-    bull_pct = (len(acima_list) / max(total_ativos, 1)) * 100.0
+    now_brt = datetime.now(TIMEZONE_BRT).strftime("%H:%M:%S")
 
-    # KPI Row
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        st.markdown(
-            f"""<div class="kpi-card">
-                <div class="kpi-label">Universo Ativo</div>
-                <div class="kpi-value">{total_ativos}</div>
-                <div class="kpi-sub">Ativos com dados válidos (15m/1D)</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-    with k2:
-        st.markdown(
-            f"""<div class="kpi-card">
-                <div class="kpi-label">Sentimento RSI vs. SMA (15m)</div>
-                <div class="kpi-value" style="color:#34d399;">{bull_pct:.1f}% Alta</div>
-                <div class="kpi-sub">{len(acima_list)} em alta · {len(abaixo_list)} em baixa</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-    with k3:
-        st.markdown(
-            f"""<div class="kpi-card">
-                <div class="kpi-label">Fluxo Diário Efetivo</div>
-                <div class="kpi-value">{up_daily_count} ↑ <span style="color:#64748b;">/</span> {down_daily_count} ↓</div>
-                <div class="kpi-sub">Considerando ^VIX invertido</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-    with k4:
-        extremos_amp = int((summary_df["Z-Score Amp. (20d)"].abs() >= 1.5).sum()) if "Z-Score Amp. (20d)" in summary_df else 0
-        st.markdown(
-            f"""<div class="kpi-card">
-                <div class="kpi-label">Amplitude |Z| ≥ 1.5 DP</div>
-                <div class="kpi-value" style="color:#fbbf24;">{extremos_amp}</div>
-                <div class="kpi-sub">Sessões com choque de range (20d)</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-    st.progress(min(max(bull_pct / 100.0, 0.0), 1.0), text=f"Termômetro Intraday (15m): {len(acima_list)} de {total_ativos} ativos com sinal de alta")
-
-    # Painéis de Tendência
+    st.markdown("### 📊 Balanço de Tendência (RSI de 15m vs Média)")
     c_up, c_down = st.columns(2)
+
     with c_up:
         st.markdown(
-            f"""<div class="trend-panel trend-panel-bull">
-                <div class="trend-header">
-                    <span class="trend-title-bull">▲ Sinal de Alta (15m)</span>
-                    <span class="badge-count">{len(acima_list)} ativos</span>
-                </div>
-                {render_chips(acima_list, "chip-bull")}
+            f"""<div class="trend-card trend-up">
+            <h4 style='color: #10b981; margin: 0;'>🔥 Tendência de Alta: {len(acima_list)} Ativos</h4>
+            <p style='font-size: 1.15rem; font-weight: bold; margin: 8px 0 0 0;'>{', '.join(acima_list) if acima_list else 'Nenhum'}</p>
             </div>""",
             unsafe_allow_html=True,
         )
+
     with c_down:
         st.markdown(
-            f"""<div class="trend-panel trend-panel-bear">
-                <div class="trend-header">
-                    <span class="trend-title-bear">▼ Sinal de Baixa (15m)</span>
-                    <span class="badge-count">{len(abaixo_list)} ativos</span>
-                </div>
-                {render_chips(abaixo_list, "chip-bear")}
+            f"""<div class="trend-card trend-down">
+            <h4 style='color: #ef4444; margin: 0;'>❄️ Tendência de Baixa: {len(abaixo_list)} Ativos</h4>
+            <p style='font-size: 1.15rem; font-weight: bold; margin: 8px 0 0 0;'>{', '.join(abaixo_list) if abaixo_list else 'Nenhum'}</p>
             </div>""",
             unsafe_allow_html=True,
         )
 
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    st.markdown("---")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Ativos Analisados", f"{total_ativos}")
+    col2.metric("RSI > SMA (15m)", f"{len(acima_list)} ({(len(acima_list) / max(total_ativos, 1) * 100):.1f}%)")
+    col3.metric("Variação Diária (Altas/Baixas)", f"{up_daily_count} ↑ / {down_daily_count} ↓")
+    col4.metric("Hora da Atualização (BRT)", now_brt)
 
-    tab_tabela, tab_graficos = st.tabs(["📋 Matriz Quantitativa & Filtros", "📉 Gráficos Intraday (15m)"])
+    f1, f2, f3 = st.columns([2, 2, 2])
+    with f1:
+        busca_ticker = st.text_input("Filtrar por ticker (ex.: NVDA, AAPL, VIX, SPX)", value="").strip().upper()
+    with f2:
+        ordenar_por = st.selectbox(
+            "Ordenar tabela por",
+            options=[
+                "Z-Score (20d)",
+                "Z-Score Amp (20d)",
+                "Var. Diária (%)",
+                "Spread (RSI - MA)",
+                "Ativo",
+            ],
+            index=2,
+        )
+    with f3:
+        ordem_desc = st.checkbox("Ordem decrescente", value=True)
 
-    with tab_tabela:
-        f1, f2, f3, f4 = st.columns([2, 2, 1.5, 1.5])
-        with f1:
-            busca_ticker = st.text_input("Buscar ativo", placeholder="Ex.: NVDA, AAPL, SPX, VIX", value="").strip().upper()
-        with f2:
-            ordenar_por = st.selectbox(
-                "Ordenar por",
-                options=[
-                    "Var. Diária (%)",
-                    "Z-Score Amp. (20d)",
-                    "Z-Score Ret. (20d)",
-                    "Spread Dir.",
-                    "Ativo",
-                ],
-                index=0,
-            )
-        with f3:
-            filtro_direcao = st.selectbox("Direção", options=["Todos", "ALTA", "BAIXA"], index=0)
-        with f4:
-            st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
-            ordem_desc = st.checkbox("Decrescente", value=True)
+    filtered_df = summary_df.copy()
+    if busca_ticker:
+        filtered_df = filtered_df[
+            filtered_df["Ativo"].str.upper().str.contains(busca_ticker, na=False)
+            | filtered_df["_raw_ticker"].str.upper().str.contains(busca_ticker, na=False)
+        ]
 
-        filtered_df = summary_df.copy()
-        if busca_ticker:
-            filtered_df = filtered_df[filtered_df["Ativo"].str.contains(busca_ticker, na=False)]
-        if filtro_direcao != "Todos":
-            filtered_df = filtered_df[filtered_df["Direção Sinal"] == filtro_direcao]
+    if ordenar_por in filtered_df.columns:
+        filtered_df = filtered_df.sort_values(by=ordenar_por, ascending=not ordem_desc, na_position="last")
 
-        if ordenar_por in filtered_df.columns:
-            filtered_df = filtered_df.sort_values(by=ordenar_por, ascending=not ordem_desc, na_position="last")
+    display_df = filtered_df.drop(columns=["_raw_ticker"])
 
-        def highlight_status(val: str) -> str:
-            if val == "ALTA":
-                return "background-color: rgba(16, 185, 129, 0.22); color: #34d399; font-weight: 700;"
-            if val == "BAIXA":
-                return "background-color: rgba(239, 68, 68, 0.22); color: #f87171; font-weight: 700;"
+    def highlight_status(val: str) -> str:
+        if val == "ACIMA DA MÉDIA":
+            return "background-color: rgba(16, 185, 129, 0.25); color: #10b981; font-weight: bold;"
+        if val == "ABAIXO DA MÉDIA":
+            return "background-color: rgba(239, 68, 68, 0.25); color: #ef4444; font-weight: bold;"
+        return ""
+
+    def highlight_event(val: str) -> str:
+        if "CIMA" in val:
+            return "color: #10b981; font-weight: bold;"
+        if "BAIXO" in val:
+            return "color: #ef4444; font-weight: bold;"
+        return "color: #888888;"
+
+    def highlight_zscore(val: float) -> str:
+        if pd.isna(val):
             return ""
+        if val > 1.5:
+            return "background-color: rgba(16, 185, 129, 0.22); color: #10b981; font-weight: bold;"
+        if val < -1.5:
+            return "background-color: rgba(239, 68, 68, 0.22); color: #ef4444; font-weight: bold;"
+        return ""
 
-        def highlight_event(val: str) -> str:
-            if "Alta" in val:
-                return "color: #34d399; font-weight: 700;"
-            if "Baixa" in val:
-                return "color: #f87171; font-weight: 700;"
-            return "color: #94a3b8;"
-
-        def highlight_zscore(val: float) -> str:
-            if pd.isna(val):
-                return ""
-            if val >= 2.0:
-                return "background-color: rgba(245, 158, 11, 0.25); color: #fcd34d; font-weight: 700;"
-            if val > 1.5:
-                return "background-color: rgba(16, 185, 129, 0.20); color: #6ee7b7; font-weight: 600;"
-            if val < -1.5:
-                return "background-color: rgba(239, 68, 68, 0.20); color: #fca5a5; font-weight: 600;"
+    def highlight_pct(val: float) -> str:
+        if pd.isna(val):
             return ""
+        if val > 0:
+            return "color: #10b981; font-weight: bold;"
+        if val < 0:
+            return "color: #ef4444; font-weight: bold;"
+        return ""
 
-        def highlight_pct(val: float) -> str:
-            if pd.isna(val):
-                return ""
-            if val > 0:
-                return "color: #34d399; font-weight: 600;"
-            if val < 0:
-                return "color: #f87171; font-weight: 600;"
-            return ""
+    styled_df = (
+        display_df.style
+        .map(highlight_status, subset=["Status"])
+        .map(highlight_event, subset=["Sinal Último Candle"])
+        .map(highlight_zscore, subset=["Z-Score (20d)"])
+        .map(highlight_zscore, subset=["Z-Score Amp (20d)"])
+        .map(highlight_pct, subset=["Var. Diária (%)"])
+        .format(
+            {
+                "Preço": "${:.2f}",
+                "Var. Diária (%)": "{:+.2f}%",
+                rsi_col_name: "{:.2f}",
+                ma_col_name: "{:.2f}",
+                "Spread (RSI - MA)": "{:+.2f}",
+                "Z-Score (20d)": "{:+.2f}",
+                "Z-Score Amp (20d)": "{:+.2f}",
+            },
+            na_rep="-",
+        )
+    )
 
-        styled_df = (
-            filtered_df.style
-            .map(highlight_status, subset=["Direção Sinal"])
-            .map(highlight_event, subset=["Evento"])
-            .map(highlight_zscore, subset=["Z-Score Ret. (20d)"])
-            .map(highlight_zscore, subset=["Z-Score Amp. (20d)"])
-            .map(highlight_pct, subset=["Var. Diária (%)"])
-            .format(
-                {
-                    "Preço": "${:,.2f}",
-                    "Var. Diária (%)": "{:+.2f}%",
-                    rsi_col_name: "{:.2f}",
-                    ma_col_name: "{:.2f}",
-                    "Spread Dir.": "{:+.2f}",
-                    "Z-Score Ret. (20d)": "{:+.2f}",
-                    "Z-Score Amp. (20d)": "{:+.2f}",
-                },
-                na_rep="-",
-            )
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+
+    st.subheader(f"Curva RSI({rsi_len}) vs. Média Móvel ({ma_len}) — Gráfico de 15 Minutos")
+
+    chart_candidates = filtered_df["_raw_ticker"].tolist()[:max_charts]
+    active_tickers = [t for t in chart_candidates if t in data_map]
+
+    if active_tickers:
+        num_plots = len(active_tickers)
+        num_cols = 2
+        num_rows = (num_plots + 1) // num_cols
+
+        subplot_titles_list = []
+        for t in active_tickers:
+            is_abv = bool(data_map[t]["Acima_Media"].iloc[-1])
+            z_t = data_map[t]["Z_Score_20d"].iloc[-1]
+            z_str = f"Z: {z_t:+.2f}" if pd.notna(z_t) else "Z: -"
+            label = "ACIMA" if is_abv else "ABAIXO"
+            subplot_titles_list.append(f"{format_ticker_label(t)} — {label} ({z_str})")
+
+        fig = make_subplots(
+            rows=num_rows,
+            cols=num_cols,
+            subplot_titles=subplot_titles_list,
+            vertical_spacing=0.05,
+            horizontal_spacing=0.06,
         )
 
-        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=480)
+        for idx, ticker in enumerate(active_tickers):
+            row = (idx // num_cols) + 1
+            col = (idx % num_cols) + 1
+            df_plot = data_map[ticker].tail(candles_chart)
+            x_labels = df_plot.index.strftime("%d/%m %H:%M")
 
-    with tab_graficos:
-        chart_candidates = [item.replace(" (Inv)", "") for item in filtered_df["Ativo"].tolist()[:max_charts]]
-        active_tickers = [t for t in chart_candidates if t in data_map]
+            is_above = bool(df_plot["Acima_Media"].iloc[-1])
+            rsi_color = "#10b981" if is_above else "#ef4444"
 
-        if not active_tickers:
-            st.info("Nenhum ativo disponível para exibição gráfica com o filtro atual.")
-        else:
-            num_plots = len(active_tickers)
-            num_cols = 2
-            num_rows = (num_plots + 1) // num_cols
-
-            subplot_titles_list = []
-            for t in active_tickers:
-                is_abv = bool(data_map[t]["Acima_Media"].iloc[-1])
-                z_amp_t = data_map[t]["Z_Score_Amp_20d"].iloc[-1]
-                z_str = f"Z Amp: {z_amp_t:+.2f}" if pd.notna(z_amp_t) else "Z Amp: -"
-                direcao_txt = "ALTA" if is_abv else "BAIXA"
-                inv_tag = " · INV" if t in INVERTED_TICKERS else ""
-                subplot_titles_list.append(f"{t}{inv_tag} [{direcao_txt}] — {z_str}")
-
-            fig = make_subplots(
-                rows=num_rows,
-                cols=num_cols,
-                subplot_titles=subplot_titles_list,
-                vertical_spacing=0.07,
-                horizontal_spacing=0.06,
+            fig.add_trace(
+                go.Scatter(
+                    x=x_labels,
+                    y=df_plot["RSI"],
+                    mode="lines",
+                    name=f"{ticker} RSI",
+                    line=dict(color=rsi_color, width=2),
+                    showlegend=False,
+                ),
+                row=row,
+                col=col,
             )
 
-            for idx, ticker in enumerate(active_tickers):
-                row = (idx // num_cols) + 1
-                col = (idx % num_cols) + 1
-                df_plot = data_map[ticker].tail(candles_chart)
-                x_labels = df_plot.index.strftime("%d/%m %H:%M")
-
-                is_above = bool(df_plot["Acima_Media"].iloc[-1])
-                rsi_color = "#10b981" if is_above else "#ef4444"
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=x_labels,
-                        y=df_plot["RSI_MA"],
-                        mode="lines",
-                        name=f"{ticker} SMA",
-                        line=dict(color="#f59e0b", width=1.6, dash="dot"),
-                        showlegend=False,
-                    ),
-                    row=row,
-                    col=col,
-                )
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=x_labels,
-                        y=df_plot["RSI"],
-                        mode="lines",
-                        name=f"{ticker} RSI",
-                        line=dict(color=rsi_color, width=2.2),
-                        showlegend=False,
-                    ),
-                    row=row,
-                    col=col,
-                )
-
-                fig.add_hrect(
-                    y0=30,
-                    y1=70,
-                    fillcolor="rgba(148, 163, 184, 0.05)",
-                    line_width=0,
-                    row=row,
-                    col=col,
-                )
-                fig.add_hline(y=70, line_dash="dash", line_color="rgba(239, 68, 68, 0.35)", line_width=1, row=row, col=col)
-                fig.add_hline(y=50, line_dash="dot", line_color="rgba(148, 163, 184, 0.22)", line_width=1, row=row, col=col)
-                fig.add_hline(y=30, line_dash="dash", line_color="rgba(16, 185, 129, 0.35)", line_width=1, row=row, col=col)
-
-                fig.update_yaxes(range=[10, 90], tickfont=dict(size=10), row=row, col=col)
-                fig.update_xaxes(nticks=5, tickfont=dict(size=10), row=row, col=col)
-
-            fig.update_layout(
-                height=265 * num_rows,
-                template="plotly_dark",
-                paper_bgcolor="rgba(15, 23, 42, 0.45)",
-                plot_bgcolor="rgba(15, 23, 42, 0.25)",
-                margin=dict(l=24, r=24, t=46, b=24),
+            fig.add_trace(
+                go.Scatter(
+                    x=x_labels,
+                    y=df_plot["RSI_MA"],
+                    mode="lines",
+                    name=f"{ticker} SMA",
+                    line=dict(color="#f59e0b", width=1.5, dash="dot"),
+                    showlegend=False,
+                ),
+                row=row,
+                col=col,
             )
 
-            st.plotly_chart(fig, use_container_width=True)
+            fig.add_hline(y=70, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=row, col=col)
+            fig.add_hline(y=30, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=row, col=col)
+            fig.update_yaxes(range=[10, 90], row=row, col=col)
+            fig.update_xaxes(nticks=6, row=row, col=col)
+
+        fig.update_layout(
+            height=240 * num_rows,
+            template="plotly_dark",
+            margin=dict(l=20, r=20, t=40, b=20),
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
 
     if auto_refresh:
         time.sleep(60)
