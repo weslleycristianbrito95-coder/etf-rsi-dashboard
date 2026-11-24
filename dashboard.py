@@ -10,14 +10,12 @@ import pytz
 import streamlit as st
 import yfinance as yf
 
-# Configuração da página (deve ser a primeira chamada Streamlit)
 st.set_page_config(
     page_title="Scanner Intraday Nasdaq — RSI & Variação Diária",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Estilização CSS customizada
 st.markdown(
     """
     <style>
@@ -47,20 +45,19 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Constantes
 RSI_PERIOD = 14
 RSI_MA_PERIOD = 20
 TIMEZONE_BRT = pytz.timezone("America/Sao_Paulo")
 
 FALLBACK_NASDAQ_TICKERS: Tuple[str, ...] = (
-    "MSFT", "AAPL", "NVDA", "AMZN", "GOOGL", "META", "AVGO", "TSLA", "COST",
-    "ASML", "WMT", "AMD", "PANW", "TXN", "AMAT", "MU", "LRCX", "PLTR", "CSCO",
-    "INTC", "SPCX", "NFLX", "CRWD",
+    "QQQ", "MSFT", "AAPL", "NVDA", "AMZN", "GOOGL", "GOOG", "META", "AVGO", "TSLA",
+    "COST", "ASML", "WMT", "AMD", "PANW", "TXN", "AMAT", "MU", "LRCX", "PLTR",
+    "CSCO", "INTC", "SPCX"
 )
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_all_nasdaq_stocks() -> List[str]:
+def get_all_nasdaq_stocks(exclude_etfs: bool = False, clean_symbols_only: bool = True) -> List[str]:
     return list(FALLBACK_NASDAQ_TICKERS)
 
 
@@ -100,7 +97,7 @@ def fetch_and_process_data(
     rsi_len: int,
     ma_len: int,
     include_extended: bool,
-    batch_size: int = 50,
+    batch_size: int = 250,
 ) -> Dict[str, pd.DataFrame]:
     processed: Dict[str, pd.DataFrame] = {}
     ticker_list = list(tickers)
@@ -137,21 +134,34 @@ def fetch_and_process_data(
 
                 z_score_val = np.nan
                 daily_var_pct = np.nan
+                z_score_amp = np.nan
 
                 if len(df_d) >= 2:
                     df_d["Daily_Return_Pct"] = df_d["Close"].pct_change() * 100.0
                     daily_var_pct = float(df_d["Daily_Return_Pct"].iloc[-1])
 
+                if "High" in df_d.columns and "Low" in df_d.columns:
+                    df_d["Amplitude"] = (df_d["High"] - df_d["Low"]) / df_d["Low"]
+
                 if len(df_d) >= 21:
                     rolling_mean = df_d["Daily_Return_Pct"].rolling(20).mean()
                     rolling_std = df_d["Daily_Return_Pct"].rolling(20).std()
-
                     latest_ret = df_d["Daily_Return_Pct"].iloc[-1]
                     l_mean = rolling_mean.iloc[-1]
                     l_std = rolling_std.iloc[-1]
 
                     if pd.notna(l_std) and l_std > 0 and pd.notna(latest_ret) and pd.notna(l_mean):
                         z_score_val = float((latest_ret - l_mean) / l_std)
+
+                    if "Amplitude" in df_d.columns:
+                        amp_mean = df_d["Amplitude"].rolling(20).mean()
+                        amp_std = df_d["Amplitude"].rolling(20).std()
+                        latest_amp = df_d["Amplitude"].iloc[-1]
+                        l_amp_mean = amp_mean.iloc[-1]
+                        l_amp_std = amp_std.iloc[-1]
+
+                        if pd.notna(l_amp_std) and l_amp_std > 0 and pd.notna(latest_amp) and pd.notna(l_amp_mean):
+                            z_score_amp = float((latest_amp - l_amp_mean) / l_amp_std)
 
                 df = _extract_ticker_df(raw_intraday, ticker, len(batch))
                 if df.empty or "Close" not in df.columns:
@@ -172,6 +182,7 @@ def fetch_and_process_data(
                 df["Spread"] = df["RSI"] - df["RSI_MA"]
                 df["Acima_Media"] = df["RSI"] > df["RSI_MA"]
                 df["Z_Score_20d"] = z_score_val
+                df["Z_Score_Amp_20d"] = z_score_amp
                 df["Var_Diaria_Pct"] = daily_var_pct
 
                 processed[ticker] = df
@@ -188,16 +199,13 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Universo Escolhido")
-        custom_input = st.text_area(
-            "Ativos monitorados (separados por vírgula)",
-            value=", ".join(all_nasdaq),
-            height=110,
+        st.radio(
+            "Seleção de ativos",
+            options=["Lista Personalizada"],
+            index=0,
         )
-        selected_tickers = [
-            t.strip().upper() for t in custom_input.split(",") if t.strip()
-        ]
-        if not selected_tickers:
-            selected_tickers = all_nasdaq
+
+        selected_tickers = all_nasdaq
 
         st.header("Parâmetros Técnicos")
         rsi_len = st.number_input("Período RSI", min_value=2, max_value=50, value=RSI_PERIOD)
@@ -217,7 +225,7 @@ def main() -> None:
         )
 
     if not data_map:
-        st.error("Não foi possível obter os dados no momento. Verifique os tickers ou tente novamente.")
+        st.error("Não foi possível obter os dados no momento.")
         return
 
     summary_rows = []
@@ -246,6 +254,7 @@ def main() -> None:
             abaixo_list.append(ticker)
 
         z_val = float(last["Z_Score_20d"]) if pd.notna(last["Z_Score_20d"]) else np.nan
+        z_amp_val = float(last["Z_Score_Amp_20d"]) if pd.notna(last["Z_Score_Amp_20d"]) else np.nan
         var_diaria = float(last["Var_Diaria_Pct"]) if pd.notna(last["Var_Diaria_Pct"]) else np.nan
 
         if pd.notna(var_diaria):
@@ -271,6 +280,7 @@ def main() -> None:
                 ma_col_name: round(float(last["RSI_MA"]), 2),
                 "Spread (RSI - MA)": round(float(last["Spread"]), 2),
                 "Z-Score (20d)": z_val,
+                "Z-Score Amp (20d)": z_amp_val,
                 "Status": "ACIMA DA MÉDIA" if is_above else "ABAIXO DA MÉDIA",
                 "Sinal Último Candle": evento,
             }
@@ -280,62 +290,23 @@ def main() -> None:
     total_ativos = len(summary_df)
     now_brt = datetime.now(TIMEZONE_BRT).strftime("%H:%M:%S")
 
-    # Cálculo da balança de força (Alta vs. Baixa no RSI)
-    pct_acima = (len(acima_list) / max(total_ativos, 1)) * 100.0
-    pct_abaixo = 100.0 - pct_acima if total_ativos > 0 else 0.0
-    spread_medio = float(summary_df["Spread (RSI - MA)"].mean()) if not summary_df.empty else 0.0
-
-    top_alta = (
-        summary_df[summary_df["Spread (RSI - MA)"] > 0]
-        .sort_values(by="Spread (RSI - MA)", ascending=False)
-        .head(4)["Ativo"]
-        .tolist()
-    )
-    top_baixa = (
-        summary_df[summary_df["Spread (RSI - MA)"] < 0]
-        .sort_values(by="Spread (RSI - MA)", ascending=True)
-        .head(4)["Ativo"]
-        .tolist()
-    )
-
-    st.markdown("### ⚖️ Balança de Força — Alta vs. Baixa no RSI")
-
-    st.markdown(
-        f"""
-        <div style="margin-bottom: 14px;">
-            <div style="display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 6px;">
-                <span style="color: #10b981;">🟢 ALTA (RSI &gt; Média): {len(acima_list)} ({pct_acima:.1f}%)</span>
-                <span style="color: #9ca3af;">Spread Médio: {spread_medio:+.2f}</span>
-                <span style="color: #ef4444;">🔴 BAIXA (RSI &lt; Média): {len(abaixo_list)} ({pct_abaixo:.1f}%)</span>
-            </div>
-            <div style="width: 100%; height: 22px; background-color: rgba(239, 68, 68, 0.35); border-radius: 999px; overflow: hidden; display: flex; border: 1px solid rgba(255,255,255,0.12);">
-                <div style="width: {pct_acima:.1f}%; background: linear-gradient(90deg, #059669, #10b981); transition: width 0.3s ease;"></div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
+    st.markdown("### 📊 Balanço de Tendência (RSI de 15m vs Média)")
     c_up, c_down = st.columns(2)
 
     with c_up:
-        destaque_alta = ", ".join(top_alta) if top_alta else "—"
         st.markdown(
             f"""<div class="trend-card trend-up">
-            <h4 style='color: #10b981; margin: 0;'>🔥 Pressão de Alta: {len(acima_list)} Ativos ({pct_acima:.1f}%)</h4>
-            <p style='font-size: 0.9rem; color: #d1fae5; margin: 6px 0 4px 0;'><strong>Maior força (Spread +):</strong> {destaque_alta}</p>
-            <p style='font-size: 1.05rem; font-weight: bold; margin: 6px 0 0 0;'>{', '.join(acima_list) if acima_list else 'Nenhum'}</p>
+            <h4 style='color: #10b981; margin: 0;'>🔥 Tendência de Alta: {len(acima_list)} Ativos</h4>
+            <p style='font-size: 1.15rem; font-weight: bold; margin: 8px 0 0 0;'>{', '.join(acima_list) if acima_list else 'Nenhum'}</p>
             </div>""",
             unsafe_allow_html=True,
         )
 
     with c_down:
-        destaque_baixa = ", ".join(top_baixa) if top_baixa else "—"
         st.markdown(
             f"""<div class="trend-card trend-down">
-            <h4 style='color: #ef4444; margin: 0;'>❄️ Pressão de Baixa: {len(abaixo_list)} Ativos ({pct_abaixo:.1f}%)</h4>
-            <p style='font-size: 0.9rem; color: #fee2e2; margin: 6px 0 4px 0;'><strong>Maior pressão (Spread -):</strong> {destaque_baixa}</p>
-            <p style='font-size: 1.05rem; font-weight: bold; margin: 6px 0 0 0;'>{', '.join(abaixo_list) if abaixo_list else 'Nenhum'}</p>
+            <h4 style='color: #ef4444; margin: 0;'>❄️ Tendência de Baixa: {len(abaixo_list)} Ativos</h4>
+            <p style='font-size: 1.15rem; font-weight: bold; margin: 8px 0 0 0;'>{', '.join(abaixo_list) if abaixo_list else 'Nenhum'}</p>
             </div>""",
             unsafe_allow_html=True,
         )
@@ -343,19 +314,24 @@ def main() -> None:
     st.markdown("---")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Ações Analisadas", f"{total_ativos}")
-    col2.metric("RSI > SMA (15m)", f"{len(acima_list)} ({pct_acima:.1f}%)")
+    col2.metric("RSI > SMA (15m)", f"{len(acima_list)} ({(len(acima_list) / max(total_ativos, 1) * 100):.1f}%)")
     col3.metric("Variação Diária (Altas/Baixas)", f"{up_daily_count} ↑ / {down_daily_count} ↓")
     col4.metric("Hora da Atualização (BRT)", now_brt)
 
-    # Filtros da tabela
     f1, f2, f3 = st.columns([2, 2, 2])
     with f1:
         busca_ticker = st.text_input("Filtrar por ticker (ex.: NVDA, AAPL, TSLA)", value="").strip().upper()
     with f2:
         ordenar_por = st.selectbox(
             "Ordenar tabela por",
-            options=["Z-Score (20d)", "Var. Diária (%)", "Spread (RSI - MA)", "Ativo"],
-            index=1,
+            options=[
+                "Z-Score (20d)",
+                "Z-Score Amp (20d)",
+                "Var. Diária (%)",
+                "Spread (RSI - MA)",
+                "Ativo",
+            ],
+            index=2,
         )
     with f3:
         ordem_desc = st.checkbox("Ordem decrescente", value=True)
@@ -404,6 +380,7 @@ def main() -> None:
         .map(highlight_status, subset=["Status"])
         .map(highlight_event, subset=["Sinal Último Candle"])
         .map(highlight_zscore, subset=["Z-Score (20d)"])
+        .map(highlight_zscore, subset=["Z-Score Amp (20d)"])
         .map(highlight_pct, subset=["Var. Diária (%)"])
         .format(
             {
@@ -413,6 +390,7 @@ def main() -> None:
                 ma_col_name: "{:.2f}",
                 "Spread (RSI - MA)": "{:+.2f}",
                 "Z-Score (20d)": "{:+.2f}",
+                "Z-Score Amp (20d)": "{:+.2f}",
             },
             na_rep="-",
         )
