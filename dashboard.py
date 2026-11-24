@@ -415,4 +415,295 @@ def main() -> None:
         else:
             abaixo_list.append(display_name)
 
-        z_val = float(last["Z_Score_20d"]) if pd.notna(last
+        z_val = float(last["Z_Score_20d"]) if pd.notna(last["Z_Score_20d"]) else np.nan
+        z_amp_val = float(last["Z_Score_Amp_20d"]) if pd.notna(last["Z_Score_Amp_20d"]) else np.nan
+        var_diaria = float(last["Var_Diaria_Pct"]) if pd.notna(last["Var_Diaria_Pct"]) else np.nan
+
+        if pd.notna(var_diaria):
+            efetiva_var = -var_diaria if is_inverted else var_diaria
+            if efetiva_var > 0:
+                up_daily_count += 1
+            elif efetiva_var < 0:
+                down_daily_count += 1
+
+        if is_above and not was_above:
+            evento = "▲ Cruzou Alta"
+        elif not is_above and was_above:
+            evento = "▼ Cruzou Baixa"
+        else:
+            evento = "Em tendência"
+
+        summary_rows.append(
+            {
+                "Ativo": display_name,
+                "Candle": df.index[-1].strftime("%d/%m %H:%M"),
+                "Preço": round(float(last["Close"]), 2),
+                "Var. Diária (%)": var_diaria,
+                rsi_col_name: round(float(last["RSI"]), 2),
+                ma_col_name: round(float(last["RSI_MA"]), 2),
+                "Spread Dir.": round(float(last["Spread"]), 2),
+                "Z-Score Ret. (20d)": z_val,
+                "Z-Score Amp. (20d)": z_amp_val,
+                "Direção Sinal": "ALTA" if is_above else "BAIXA",
+                "Evento": evento,
+            }
+        )
+
+    summary_df = pd.DataFrame(summary_rows)
+    total_ativos = len(summary_df)
+    bull_pct = (len(acima_list) / max(total_ativos, 1)) * 100.0
+
+    # KPI Row
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.markdown(
+            f"""<div class="kpi-card">
+                <div class="kpi-label">Universo Ativo</div>
+                <div class="kpi-value">{total_ativos}</div>
+                <div class="kpi-sub">Ativos com dados válidos (15m/1D)</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    with k2:
+        st.markdown(
+            f"""<div class="kpi-card">
+                <div class="kpi-label">Sentimento RSI vs. SMA (15m)</div>
+                <div class="kpi-value" style="color:#34d399;">{bull_pct:.1f}% Alta</div>
+                <div class="kpi-sub">{len(acima_list)} em alta · {len(abaixo_list)} em baixa</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    with k3:
+        st.markdown(
+            f"""<div class="kpi-card">
+                <div class="kpi-label">Fluxo Diário Efetivo</div>
+                <div class="kpi-value">{up_daily_count} ↑ <span style="color:#64748b;">/</span> {down_daily_count} ↓</div>
+                <div class="kpi-sub">Considerando ^VIX invertido</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    with k4:
+        extremos_amp = int((summary_df["Z-Score Amp. (20d)"].abs() >= 1.5).sum()) if "Z-Score Amp. (20d)" in summary_df else 0
+        st.markdown(
+            f"""<div class="kpi-card">
+                <div class="kpi-label">Amplitude |Z| ≥ 1.5 DP</div>
+                <div class="kpi-value" style="color:#fbbf24;">{extremos_amp}</div>
+                <div class="kpi-sub">Sessões com choque de range (20d)</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+    st.progress(min(max(bull_pct / 100.0, 0.0), 1.0), text=f"Termômetro Intraday (15m): {len(acima_list)} de {total_ativos} ativos com sinal de alta")
+
+    # Painéis de Tendência
+    c_up, c_down = st.columns(2)
+    with c_up:
+        st.markdown(
+            f"""<div class="trend-panel trend-panel-bull">
+                <div class="trend-header">
+                    <span class="trend-title-bull">▲ Sinal de Alta (15m)</span>
+                    <span class="badge-count">{len(acima_list)} ativos</span>
+                </div>
+                {render_chips(acima_list, "chip-bull")}
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    with c_down:
+        st.markdown(
+            f"""<div class="trend-panel trend-panel-bear">
+                <div class="trend-header">
+                    <span class="trend-title-bear">▼ Sinal de Baixa (15m)</span>
+                    <span class="badge-count">{len(abaixo_list)} ativos</span>
+                </div>
+                {render_chips(abaixo_list, "chip-bear")}
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    tab_tabela, tab_graficos = st.tabs(["📋 Matriz Quantitativa & Filtros", "📉 Gráficos Intraday (15m)"])
+
+    with tab_tabela:
+        f1, f2, f3, f4 = st.columns([2, 2, 1.5, 1.5])
+        with f1:
+            busca_ticker = st.text_input("Buscar ativo", placeholder="Ex.: NVDA, AAPL, SPX, VIX", value="").strip().upper()
+        with f2:
+            ordenar_por = st.selectbox(
+                "Ordenar por",
+                options=[
+                    "Var. Diária (%)",
+                    "Z-Score Amp. (20d)",
+                    "Z-Score Ret. (20d)",
+                    "Spread Dir.",
+                    "Ativo",
+                ],
+                index=0,
+            )
+        with f3:
+            filtro_direcao = st.selectbox("Direção", options=["Todos", "ALTA", "BAIXA"], index=0)
+        with f4:
+            st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+            ordem_desc = st.checkbox("Decrescente", value=True)
+
+        filtered_df = summary_df.copy()
+        if busca_ticker:
+            filtered_df = filtered_df[filtered_df["Ativo"].str.contains(busca_ticker, na=False)]
+        if filtro_direcao != "Todos":
+            filtered_df = filtered_df[filtered_df["Direção Sinal"] == filtro_direcao]
+
+        if ordenar_por in filtered_df.columns:
+            filtered_df = filtered_df.sort_values(by=ordenar_por, ascending=not ordem_desc, na_position="last")
+
+        def highlight_status(val: str) -> str:
+            if val == "ALTA":
+                return "background-color: rgba(16, 185, 129, 0.22); color: #34d399; font-weight: 700;"
+            if val == "BAIXA":
+                return "background-color: rgba(239, 68, 68, 0.22); color: #f87171; font-weight: 700;"
+            return ""
+
+        def highlight_event(val: str) -> str:
+            if "Alta" in val:
+                return "color: #34d399; font-weight: 700;"
+            if "Baixa" in val:
+                return "color: #f87171; font-weight: 700;"
+            return "color: #94a3b8;"
+
+        def highlight_zscore(val: float) -> str:
+            if pd.isna(val):
+                return ""
+            if val >= 2.0:
+                return "background-color: rgba(245, 158, 11, 0.25); color: #fcd34d; font-weight: 700;"
+            if val > 1.5:
+                return "background-color: rgba(16, 185, 129, 0.20); color: #6ee7b7; font-weight: 600;"
+            if val < -1.5:
+                return "background-color: rgba(239, 68, 68, 0.20); color: #fca5a5; font-weight: 600;"
+            return ""
+
+        def highlight_pct(val: float) -> str:
+            if pd.isna(val):
+                return ""
+            if val > 0:
+                return "color: #34d399; font-weight: 600;"
+            if val < 0:
+                return "color: #f87171; font-weight: 600;"
+            return ""
+
+        styled_df = (
+            filtered_df.style
+            .map(highlight_status, subset=["Direção Sinal"])
+            .map(highlight_event, subset=["Evento"])
+            .map(highlight_zscore, subset=["Z-Score Ret. (20d)"])
+            .map(highlight_zscore, subset=["Z-Score Amp. (20d)"])
+            .map(highlight_pct, subset=["Var. Diária (%)"])
+            .format(
+                {
+                    "Preço": "${:,.2f}",
+                    "Var. Diária (%)": "{:+.2f}%",
+                    rsi_col_name: "{:.2f}",
+                    ma_col_name: "{:.2f}",
+                    "Spread Dir.": "{:+.2f}",
+                    "Z-Score Ret. (20d)": "{:+.2f}",
+                    "Z-Score Amp. (20d)": "{:+.2f}",
+                },
+                na_rep="-",
+            )
+        )
+
+        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=480)
+
+    with tab_graficos:
+        chart_candidates = [item.replace(" (Inv)", "") for item in filtered_df["Ativo"].tolist()[:max_charts]]
+        active_tickers = [t for t in chart_candidates if t in data_map]
+
+        if not active_tickers:
+            st.info("Nenhum ativo disponível para exibição gráfica com o filtro atual.")
+        else:
+            num_plots = len(active_tickers)
+            num_cols = 2
+            num_rows = (num_plots + 1) // num_cols
+
+            subplot_titles_list = []
+            for t in active_tickers:
+                is_abv = bool(data_map[t]["Acima_Media"].iloc[-1])
+                z_amp_t = data_map[t]["Z_Score_Amp_20d"].iloc[-1]
+                z_str = f"Z Amp: {z_amp_t:+.2f}" if pd.notna(z_amp_t) else "Z Amp: -"
+                direcao_txt = "ALTA" if is_abv else "BAIXA"
+                inv_tag = " · INV" if t in INVERTED_TICKERS else ""
+                subplot_titles_list.append(f"{t}{inv_tag} [{direcao_txt}] — {z_str}")
+
+            fig = make_subplots(
+                rows=num_rows,
+                cols=num_cols,
+                subplot_titles=subplot_titles_list,
+                vertical_spacing=0.07,
+                horizontal_spacing=0.06,
+            )
+
+            for idx, ticker in enumerate(active_tickers):
+                row = (idx // num_cols) + 1
+                col = (idx % num_cols) + 1
+                df_plot = data_map[ticker].tail(candles_chart)
+                x_labels = df_plot.index.strftime("%d/%m %H:%M")
+
+                is_above = bool(df_plot["Acima_Media"].iloc[-1])
+                rsi_color = "#10b981" if is_above else "#ef4444"
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_labels,
+                        y=df_plot["RSI_MA"],
+                        mode="lines",
+                        name=f"{ticker} SMA",
+                        line=dict(color="#f59e0b", width=1.6, dash="dot"),
+                        showlegend=False,
+                    ),
+                    row=row,
+                    col=col,
+                )
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_labels,
+                        y=df_plot["RSI"],
+                        mode="lines",
+                        name=f"{ticker} RSI",
+                        line=dict(color=rsi_color, width=2.2),
+                        showlegend=False,
+                    ),
+                    row=row,
+                    col=col,
+                )
+
+                fig.add_hrect(
+                    y0=30,
+                    y1=70,
+                    fillcolor="rgba(148, 163, 184, 0.05)",
+                    line_width=0,
+                    row=row,
+                    col=col,
+                )
+                fig.add_hline(y=70, line_dash="dash", line_color="rgba(239, 68, 68, 0.35)", line_width=1, row=row, col=col)
+                fig.add_hline(y=50, line_dash="dot", line_color="rgba(148, 163, 184, 0.22)", line_width=1, row=row, col=col)
+                fig.add_hline(y=30, line_dash="dash", line_color="rgba(16, 185, 129, 0.35)", line_width=1, row=row, col=col)
+
+                fig.update_yaxes(range=[10, 90], tickfont=dict(size=10), row=row, col=col)
+                fig.update_xaxes(nticks=5, tickfont=dict(size=10), row=row, col=col)
+
+            fig.update_layout(
+                height=265 * num_rows,
+                template="plotly_dark",
+                paper_bgcolor="rgba(15, 23, 42, 0.45)",
+                plot_bgcolor="rgba(15, 23, 42, 0.25)",
+                margin=dict(l=24, r=24, t=46, b=24),
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+    if auto_refresh:
+        time.sleep(60)
+        st.rerun()
+
+
+if __name__ == "__main__":
+    main()
