@@ -11,7 +11,8 @@ import streamlit as st
 import yfinance as yf
 
 st.set_page_config(
-    page_title="Scanner Intraday Nasdaq — RSI & Variação Diária",
+    page_title="Scanner Intraday Nasdaq & S&P 500",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -19,26 +20,153 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    [data-testid="stMetricValue"] {
-        font-size: 1.4rem !important;
-        font-weight: 700 !important;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    [data-testid="stMetricLabel"] {
-        font-size: 0.9rem !important;
+
+    .block-container {
+        padding-top: 1.5rem;
+        padding-bottom: 2rem;
     }
-    .trend-card {
-        padding: 15px;
-        border-radius: 8px;
-        margin-bottom: 15px;
-        border: 1px solid rgba(255,255,255,0.1);
+
+    .header-banner {
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.85) 100%);
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        border-radius: 12px;
+        padding: 18px 22px;
+        margin-bottom: 18px;
     }
-    .trend-up {
-        background-color: rgba(16, 185, 129, 0.1);
-        border-left: 5px solid #10b981;
+
+    .header-title {
+        font-size: 1.55rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        color: #f8fafc;
+        margin: 0;
     }
-    .trend-down {
-        background-color: rgba(239, 68, 68, 0.1);
-        border-left: 5px solid #ef4444;
+
+    .header-subtitle {
+        font-size: 0.88rem;
+        color: #94a3b8;
+        margin: 4px 0 0 0;
+    }
+
+    .kpi-card {
+        background: rgba(15, 23, 42, 0.72);
+        border: 1px solid rgba(148, 163, 184, 0.15);
+        border-radius: 10px;
+        padding: 14px 16px;
+    }
+
+    .kpi-label {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #94a3b8;
+        margin-bottom: 4px;
+    }
+
+    .kpi-value {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: #f8fafc;
+    }
+
+    .kpi-sub {
+        font-size: 0.78rem;
+        color: #64748b;
+        margin-top: 2px;
+    }
+
+    .trend-panel {
+        border-radius: 12px;
+        padding: 16px 18px;
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        background: rgba(15, 23, 42, 0.65);
+        height: 100%;
+    }
+
+    .trend-panel-bull {
+        border-top: 3px solid #10b981;
+        background: linear-gradient(180deg, rgba(16, 185, 129, 0.09) 0%, rgba(15, 23, 42, 0.7) 100%);
+    }
+
+    .trend-panel-bear {
+        border-top: 3px solid #ef4444;
+        background: linear-gradient(180deg, rgba(239, 68, 68, 0.09) 0%, rgba(15, 23, 42, 0.7) 100%);
+    }
+
+    .trend-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+
+    .trend-title-bull {
+        color: #34d399;
+        font-weight: 700;
+        font-size: 1rem;
+    }
+
+    .trend-title-bear {
+        color: #f87171;
+        font-weight: 700;
+        font-size: 1rem;
+    }
+
+    .badge-count {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.82rem;
+        font-weight: 700;
+        padding: 3px 9px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #e2e8f0;
+    }
+
+    .ticker-chip-wrap {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 6px;
+    }
+
+    .chip-bull {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.78rem;
+        font-weight: 600;
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: rgba(16, 185, 129, 0.16);
+        color: #6ee7b7;
+        border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+
+    .chip-bear {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.78rem;
+        font-weight: 600;
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: rgba(239, 68, 68, 0.16);
+        color: #fca5a5;
+        border: 1px solid rgba(239, 68, 68, 0.35);
+    }
+
+    .chip-empty {
+        font-size: 0.85rem;
+        color: #64748b;
+        font-style: italic;
+    }
+
+    .section-divider {
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.22), transparent);
+        margin: 18px 0;
     }
     </style>
     """,
@@ -190,7 +318,8 @@ def fetch_and_process_data(
                 rsi_series = calculate_rsi_wilder(df["Close"], period=rsi_len)
                 df["RSI"] = rsi_series
                 df["RSI_MA"] = df["RSI"].rolling(window=ma_len).mean()
-                df["Spread"] = df["RSI"] - df["RSI_MA"]
+                raw_spread = df["RSI"] - df["RSI_MA"]
+                df["Spread"] = -raw_spread if is_inverted else raw_spread
                 df["Acima_Media"] = (df["RSI"] < df["RSI_MA"]) if is_inverted else (df["RSI"] > df["RSI_MA"])
                 df["Z_Score_20d"] = z_score_val
                 df["Z_Score_Amp_20d"] = z_score_amp
@@ -203,40 +332,59 @@ def fetch_and_process_data(
     return processed
 
 
+def render_chips(tickers: List[str], chip_class: str, empty_text: str = "Nenhum ativo no momento") -> str:
+    if not tickers:
+        return f"<div class='chip-empty'>{empty_text}</div>"
+    chips_html = "".join([f"<span class='{chip_class}'>{t}</span>" for t in tickers])
+    return f"<div class='ticker-chip-wrap'>{chips_html}</div>"
+
+
 def main() -> None:
-    st.title("SCANNER PORTFÓLIO NASDAQ & S&P 500 — CONFIGURAÇÃO")
+    now_brt = datetime.now(TIMEZONE_BRT).strftime("%d/%m/%Y · %H:%M:%S BRT")
+
+    st.markdown(
+        f"""
+        <div class="header-banner">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                <div>
+                    <h1 class="header-title">Scanner Intraday · Nasdaq-100 & S&P 500</h1>
+                    <p class="header-subtitle">Momentum RSI (15m) vs. Média Móvel · Expansão Diária & Z-Score 20D · VIX Invertido</p>
+                </div>
+                <span class="badge-count">🕒 {now_brt}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     all_nasdaq = get_all_nasdaq_stocks()
 
     with st.sidebar:
-        st.header("Universo Escolhido")
-        st.radio(
-            "Seleção de ativos",
-            options=["Lista Consolidada (NDX + SPX + Índices)"],
-            index=0,
-        )
-
+        st.markdown("### 🎯 Universo & Controles")
+        st.caption("Top NDX + Top SPX + SPX, SPY, QQQ, ^VIX (invertido)")
         selected_tickers = all_nasdaq
 
-        st.header("Parâmetros Técnicos")
+        st.markdown("### ⚙️ Parâmetros Técnicos")
         rsi_len = st.number_input("Período RSI", min_value=2, max_value=50, value=RSI_PERIOD)
         ma_len = st.number_input("Média Móvel no RSI (SMA)", min_value=2, max_value=50, value=RSI_MA_PERIOD)
         include_extended = st.checkbox("Incluir Pré / After-Market", value=False)
         auto_refresh = st.checkbox("Auto-atualizar (60s)", value=False)
-        candles_chart = st.slider("Candles visíveis no gráfico", min_value=30, max_value=150, value=78)
-        max_charts = st.slider("Máx. gráficos 15m renderizados", min_value=4, max_value=60, value=20)
 
-        if st.button("Atualizar Agora", use_container_width=True):
+        st.markdown("### 📊 Visualização")
+        candles_chart = st.slider("Candles no gráfico 15m", min_value=30, max_value=150, value=78)
+        max_charts = st.slider("Máx. gráficos renderizados", min_value=4, max_value=24, value=14)
+
+        if st.button("🔄 Atualizar Dados Agora", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 
-    with st.spinner("Baixando e calculando indicadores..."):
+    with st.spinner("Sincronizando cotações e calculando indicadores..."):
         data_map = fetch_and_process_data(
             tuple(selected_tickers), int(rsi_len), int(ma_len), include_extended
         )
 
     if not data_map:
-        st.error("Não foi possível obter os dados no momento.")
+        st.error("Não foi possível obter os dados no momento. Tente atualizar novamente.")
         return
 
     summary_rows = []
@@ -246,7 +394,7 @@ def main() -> None:
     down_daily_count = 0
 
     rsi_col_name = f"RSI ({rsi_len})"
-    ma_col_name = f"Média RSI ({ma_len})"
+    ma_col_name = f"SMA RSI ({ma_len})"
 
     for ticker in selected_tickers:
         df = data_map.get(ticker)
@@ -267,231 +415,4 @@ def main() -> None:
         else:
             abaixo_list.append(display_name)
 
-        z_val = float(last["Z_Score_20d"]) if pd.notna(last["Z_Score_20d"]) else np.nan
-        z_amp_val = float(last["Z_Score_Amp_20d"]) if pd.notna(last["Z_Score_Amp_20d"]) else np.nan
-        var_diaria = float(last["Var_Diaria_Pct"]) if pd.notna(last["Var_Diaria_Pct"]) else np.nan
-
-        if pd.notna(var_diaria):
-            efetiva_var = -var_diaria if is_inverted else var_diaria
-            if efetiva_var > 0:
-                up_daily_count += 1
-            elif efetiva_var < 0:
-                down_daily_count += 1
-
-        if is_above and not was_above:
-            evento = "CRUZOU PARA CIMA"
-        elif not is_above and was_above:
-            evento = "CRUZOU PARA BAIXO"
-        else:
-            evento = "Mantendo tendência"
-
-        summary_rows.append(
-            {
-                "Ativo": display_name,
-                "Último Candle": df.index[-1].strftime("%d/%m %H:%M"),
-                "Preço": round(float(last["Close"]), 2),
-                "Var. Diária (%)": var_diaria,
-                rsi_col_name: round(float(last["RSI"]), 2),
-                ma_col_name: round(float(last["RSI_MA"]), 2),
-                "Spread (RSI - MA)": round(float(last["Spread"]), 2),
-                "Z-Score (20d)": z_val,
-                "Z-Score Amp (20d)": z_amp_val,
-                "Status": "ACIMA DA MÉDIA" if is_above else "ABAIXO DA MÉDIA",
-                "Sinal Último Candle": evento,
-            }
-        )
-
-    summary_df = pd.DataFrame(summary_rows)
-    total_ativos = len(summary_df)
-    now_brt = datetime.now(TIMEZONE_BRT).strftime("%H:%M:%S")
-
-    st.markdown("### 📊 Balanço de Tendência (RSI de 15m vs Média)")
-    c_up, c_down = st.columns(2)
-
-    with c_up:
-        st.markdown(
-            f"""<div class="trend-card trend-up">
-            <h4 style='color: #10b981; margin: 0;'>🔥 Tendência de Alta: {len(acima_list)} Ativos</h4>
-            <p style='font-size: 1.15rem; font-weight: bold; margin: 8px 0 0 0;'>{', '.join(acima_list) if acima_list else 'Nenhum'}</p>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-    with c_down:
-        st.markdown(
-            f"""<div class="trend-card trend-down">
-            <h4 style='color: #ef4444; margin: 0;'>❄️ Tendência de Baixa: {len(abaixo_list)} Ativos</h4>
-            <p style='font-size: 1.15rem; font-weight: bold; margin: 8px 0 0 0;'>{', '.join(abaixo_list) if abaixo_list else 'Nenhum'}</p>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("---")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Ativos Analisados", f"{total_ativos}")
-    col2.metric("Sinal Alta RSI/SMA (15m)", f"{len(acima_list)} ({(len(acima_list) / max(total_ativos, 1) * 100):.1f}%)")
-    col3.metric("Variação Diária (Altas/Baixas)", f"{up_daily_count} ↑ / {down_daily_count} ↓")
-    col4.metric("Hora da Atualização (BRT)", now_brt)
-
-    f1, f2, f3 = st.columns([2, 2, 2])
-    with f1:
-        busca_ticker = st.text_input("Filtrar por ticker (ex.: NVDA, AAPL, VIX)", value="").strip().upper()
-    with f2:
-        ordenar_por = st.selectbox(
-            "Ordenar tabela por",
-            options=[
-                "Z-Score (20d)",
-                "Z-Score Amp (20d)",
-                "Var. Diária (%)",
-                "Spread (RSI - MA)",
-                "Ativo",
-            ],
-            index=2,
-        )
-    with f3:
-        ordem_desc = st.checkbox("Ordem decrescente", value=True)
-
-    filtered_df = summary_df.copy()
-    if busca_ticker:
-        filtered_df = filtered_df[filtered_df["Ativo"].str.contains(busca_ticker, na=False)]
-
-    if ordenar_por in filtered_df.columns:
-        filtered_df = filtered_df.sort_values(by=ordenar_por, ascending=not ordem_desc, na_position="last")
-
-    def highlight_status(val: str) -> str:
-        if val == "ACIMA DA MÉDIA":
-            return "background-color: rgba(16, 185, 129, 0.25); color: #10b981; font-weight: bold;"
-        if val == "ABAIXO DA MÉDIA":
-            return "background-color: rgba(239, 68, 68, 0.25); color: #ef4444; font-weight: bold;"
-        return ""
-
-    def highlight_event(val: str) -> str:
-        if "CIMA" in val:
-            return "color: #10b981; font-weight: bold;"
-        if "BAIXO" in val:
-            return "color: #ef4444; font-weight: bold;"
-        return "color: #888888;"
-
-    def highlight_zscore(val: float) -> str:
-        if pd.isna(val):
-            return ""
-        if val > 1.5:
-            return "background-color: rgba(16, 185, 129, 0.22); color: #10b981; font-weight: bold;"
-        if val < -1.5:
-            return "background-color: rgba(239, 68, 68, 0.22); color: #ef4444; font-weight: bold;"
-        return ""
-
-    def highlight_pct(val: float) -> str:
-        if pd.isna(val):
-            return ""
-        if val > 0:
-            return "color: #10b981; font-weight: bold;"
-        if val < 0:
-            return "color: #ef4444; font-weight: bold;"
-        return ""
-
-    styled_df = (
-        filtered_df.style
-        .map(highlight_status, subset=["Status"])
-        .map(highlight_event, subset=["Sinal Último Candle"])
-        .map(highlight_zscore, subset=["Z-Score (20d)"])
-        .map(highlight_zscore, subset=["Z-Score Amp (20d)"])
-        .map(highlight_pct, subset=["Var. Diária (%)"])
-        .format(
-            {
-                "Preço": "${:.2f}",
-                "Var. Diária (%)": "{:+.2f}%",
-                rsi_col_name: "{:.2f}",
-                ma_col_name: "{:.2f}",
-                "Spread (RSI - MA)": "{:+.2f}",
-                "Z-Score (20d)": "{:+.2f}",
-                "Z-Score Amp (20d)": "{:+.2f}",
-            },
-            na_rep="-",
-        )
-    )
-
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
-
-    st.subheader(f"Curva RSI({rsi_len}) vs. Média Móvel ({ma_len}) — Gráfico de 15 Minutos")
-
-    chart_candidates = [item.replace(" (Inv)", "") for item in filtered_df["Ativo"].tolist()[:max_charts]]
-    active_tickers = [t for t in chart_candidates if t in data_map]
-
-    if active_tickers:
-        num_plots = len(active_tickers)
-        num_cols = 2
-        num_rows = (num_plots + 1) // num_cols
-
-        subplot_titles_list = []
-        for t in active_tickers:
-            is_abv = bool(data_map[t]["Acima_Media"].iloc[-1])
-            z_t = data_map[t]["Z_Score_20d"].iloc[-1]
-            z_str = f"Z: {z_t:+.2f}" if pd.notna(z_t) else "Z: -"
-            label = "ACIMA (Sinal Alta)" if is_abv else "ABAIXO (Sinal Baixa)"
-            inv_tag = " [VIX Inv]" if t in INVERTED_TICKERS else ""
-            subplot_titles_list.append(f"{t}{inv_tag} — {label} ({z_str})")
-
-        fig = make_subplots(
-            rows=num_rows,
-            cols=num_cols,
-            subplot_titles=subplot_titles_list,
-            vertical_spacing=0.05,
-            horizontal_spacing=0.06,
-        )
-
-        for idx, ticker in enumerate(active_tickers):
-            row = (idx // num_cols) + 1
-            col = (idx % num_cols) + 1
-            df_plot = data_map[ticker].tail(candles_chart)
-            x_labels = df_plot.index.strftime("%d/%m %H:%M")
-
-            is_above = bool(df_plot["Acima_Media"].iloc[-1])
-            rsi_color = "#10b981" if is_above else "#ef4444"
-
-            fig.add_trace(
-                go.Scatter(
-                    x=x_labels,
-                    y=df_plot["RSI"],
-                    mode="lines",
-                    name=f"{ticker} RSI",
-                    line=dict(color=rsi_color, width=2),
-                    showlegend=False,
-                ),
-                row=row,
-                col=col,
-            )
-
-            fig.add_trace(
-                go.Scatter(
-                    x=x_labels,
-                    y=df_plot["RSI_MA"],
-                    mode="lines",
-                    name=f"{ticker} SMA",
-                    line=dict(color="#f59e0b", width=1.5, dash="dot"),
-                    showlegend=False,
-                ),
-                row=row,
-                col=col,
-            )
-
-            fig.add_hline(y=70, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=row, col=col)
-            fig.add_hline(y=30, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=row, col=col)
-            fig.update_yaxes(range=[10, 90], row=row, col=col)
-            fig.update_xaxes(nticks=6, row=row, col=col)
-
-        fig.update_layout(
-            height=240 * num_rows,
-            template="plotly_dark",
-            margin=dict(l=20, r=20, t=40, b=20),
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    if auto_refresh:
-        time.sleep(60)
-        st.rerun()
-
-
-if __name__ == "__main__":
-    main()
+        z_val = float(last["Z_Score_20d"]) if pd.notna(last
