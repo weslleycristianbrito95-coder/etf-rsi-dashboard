@@ -49,11 +49,18 @@ RSI_PERIOD = 14
 RSI_MA_PERIOD = 20
 TIMEZONE_BRT = pytz.timezone("America/Sao_Paulo")
 
+# Universo consolidado: Top Nasdaq-100 + Top S&P 500 + SPX, SPY, QQQ, ^VIX
 FALLBACK_NASDAQ_TICKERS: Tuple[str, ...] = (
-    "QQQ", "MSFT", "AAPL", "NVDA", "AMZN", "GOOGL", "GOOG", "META", "AVGO", "TSLA",
-    "COST", "ASML", "WMT", "AMD", "PANW", "TXN", "AMAT", "MU", "LRCX", "PLTR",
-    "CSCO", "INTC", "SPCX"
+    "AAPL", "NVDA", "MSFT", "GOOGL", "AMZN", "MU", "AMD",
+    "AVGO", "META",
+    "SPX", "SPY", "QQQ", "^VIX"
 )
+
+TICKER_TO_YF: Dict[str, str] = {
+    "SPX": "^GSPC",
+}
+
+INVERTED_TICKERS = {"^VIX"}
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -74,16 +81,16 @@ def calculate_rsi_wilder(series: pd.Series, period: int = 14) -> pd.Series:
     return rsi.fillna(50.0)
 
 
-def _extract_ticker_df(raw_data: pd.DataFrame, ticker: str, total_tickers: int) -> pd.DataFrame:
+def _extract_ticker_df(raw_data: pd.DataFrame, yf_symbol: str, total_tickers: int) -> pd.DataFrame:
     if raw_data is None or raw_data.empty:
         return pd.DataFrame()
     if total_tickers == 1:
         return raw_data.copy()
     if isinstance(raw_data.columns, pd.MultiIndex):
-        if ticker in raw_data.columns.get_level_values(0):
-            return raw_data[ticker].copy()
-        if ticker in raw_data.columns.get_level_values(-1):
-            return raw_data.xs(ticker, axis=1, level=-1).copy()
+        if yf_symbol in raw_data.columns.get_level_values(0):
+            return raw_data[yf_symbol].copy()
+        if yf_symbol in raw_data.columns.get_level_values(-1):
+            return raw_data.xs(yf_symbol, axis=1, level=-1).copy()
     return pd.DataFrame()
 
 
@@ -104,9 +111,10 @@ def fetch_and_process_data(
     batches = chunk_list(ticker_list, batch_size)
 
     for batch in batches:
+        yf_batch = [TICKER_TO_YF.get(t, t) for t in batch]
         try:
             raw_daily = yf.download(
-                tickers=batch,
+                tickers=yf_batch,
                 period="40d",
                 interval="1d",
                 group_by="ticker",
@@ -114,7 +122,7 @@ def fetch_and_process_data(
                 progress=False,
             )
             raw_intraday = yf.download(
-                tickers=batch,
+                tickers=yf_batch,
                 period="5d",
                 interval="15m",
                 group_by="ticker",
@@ -126,8 +134,11 @@ def fetch_and_process_data(
             continue
 
         for ticker in batch:
+            yf_symbol = TICKER_TO_YF.get(ticker, ticker)
+            is_inverted = ticker in INVERTED_TICKERS
+
             try:
-                df_d = _extract_ticker_df(raw_daily, ticker, len(batch))
+                df_d = _extract_ticker_df(raw_daily, yf_symbol, len(yf_batch))
                 if df_d.empty or "Close" not in df_d.columns:
                     continue
                 df_d = df_d.dropna(subset=["Close"])
@@ -163,7 +174,7 @@ def fetch_and_process_data(
                         if pd.notna(l_amp_std) and l_amp_std > 0 and pd.notna(latest_amp) and pd.notna(l_amp_mean):
                             z_score_amp = float((latest_amp - l_amp_mean) / l_amp_std)
 
-                df = _extract_ticker_df(raw_intraday, ticker, len(batch))
+                df = _extract_ticker_df(raw_intraday, yf_symbol, len(yf_batch))
                 if df.empty or "Close" not in df.columns:
                     continue
                 df = df.dropna(subset=["Close"])
@@ -180,7 +191,7 @@ def fetch_and_process_data(
                 df["RSI"] = rsi_series
                 df["RSI_MA"] = df["RSI"].rolling(window=ma_len).mean()
                 df["Spread"] = df["RSI"] - df["RSI_MA"]
-                df["Acima_Media"] = df["RSI"] > df["RSI_MA"]
+                df["Acima_Media"] = (df["RSI"] < df["RSI_MA"]) if is_inverted else (df["RSI"] > df["RSI_MA"])
                 df["Z_Score_20d"] = z_score_val
                 df["Z_Score_Amp_20d"] = z_score_amp
                 df["Var_Diaria_Pct"] = daily_var_pct
@@ -193,7 +204,7 @@ def fetch_and_process_data(
 
 
 def main() -> None:
-    st.title("SCANNER PORTFÓLIO NASDAQ — CONFIGURAÇÃO")
+    st.title("SCANNER PORTFÓLIO NASDAQ & S&P 500 — CONFIGURAÇÃO")
 
     all_nasdaq = get_all_nasdaq_stocks()
 
@@ -201,7 +212,7 @@ def main() -> None:
         st.header("Universo Escolhido")
         st.radio(
             "Seleção de ativos",
-            options=["Lista Personalizada"],
+            options=["Lista Consolidada (NDX + SPX + Índices)"],
             index=0,
         )
 
@@ -247,20 +258,24 @@ def main() -> None:
 
         is_above = bool(last["Acima_Media"])
         was_above = bool(prev["Acima_Media"])
+        is_inverted = ticker in INVERTED_TICKERS
+
+        display_name = f"{ticker} (Inv)" if is_inverted else ticker
 
         if is_above:
-            acima_list.append(ticker)
+            acima_list.append(display_name)
         else:
-            abaixo_list.append(ticker)
+            abaixo_list.append(display_name)
 
         z_val = float(last["Z_Score_20d"]) if pd.notna(last["Z_Score_20d"]) else np.nan
         z_amp_val = float(last["Z_Score_Amp_20d"]) if pd.notna(last["Z_Score_Amp_20d"]) else np.nan
         var_diaria = float(last["Var_Diaria_Pct"]) if pd.notna(last["Var_Diaria_Pct"]) else np.nan
 
         if pd.notna(var_diaria):
-            if var_diaria > 0:
+            efetiva_var = -var_diaria if is_inverted else var_diaria
+            if efetiva_var > 0:
                 up_daily_count += 1
-            elif var_diaria < 0:
+            elif efetiva_var < 0:
                 down_daily_count += 1
 
         if is_above and not was_above:
@@ -272,7 +287,7 @@ def main() -> None:
 
         summary_rows.append(
             {
-                "Ativo": ticker,
+                "Ativo": display_name,
                 "Último Candle": df.index[-1].strftime("%d/%m %H:%M"),
                 "Preço": round(float(last["Close"]), 2),
                 "Var. Diária (%)": var_diaria,
@@ -313,14 +328,14 @@ def main() -> None:
 
     st.markdown("---")
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Ações Analisadas", f"{total_ativos}")
-    col2.metric("RSI > SMA (15m)", f"{len(acima_list)} ({(len(acima_list) / max(total_ativos, 1) * 100):.1f}%)")
+    col1.metric("Ativos Analisados", f"{total_ativos}")
+    col2.metric("Sinal Alta RSI/SMA (15m)", f"{len(acima_list)} ({(len(acima_list) / max(total_ativos, 1) * 100):.1f}%)")
     col3.metric("Variação Diária (Altas/Baixas)", f"{up_daily_count} ↑ / {down_daily_count} ↓")
     col4.metric("Hora da Atualização (BRT)", now_brt)
 
     f1, f2, f3 = st.columns([2, 2, 2])
     with f1:
-        busca_ticker = st.text_input("Filtrar por ticker (ex.: NVDA, AAPL, TSLA)", value="").strip().upper()
+        busca_ticker = st.text_input("Filtrar por ticker (ex.: NVDA, AAPL, VIX)", value="").strip().upper()
     with f2:
         ordenar_por = st.selectbox(
             "Ordenar tabela por",
@@ -400,7 +415,7 @@ def main() -> None:
 
     st.subheader(f"Curva RSI({rsi_len}) vs. Média Móvel ({ma_len}) — Gráfico de 15 Minutos")
 
-    chart_candidates = filtered_df["Ativo"].tolist()[:max_charts]
+    chart_candidates = [item.replace(" (Inv)", "") for item in filtered_df["Ativo"].tolist()[:max_charts]]
     active_tickers = [t for t in chart_candidates if t in data_map]
 
     if active_tickers:
@@ -413,8 +428,9 @@ def main() -> None:
             is_abv = bool(data_map[t]["Acima_Media"].iloc[-1])
             z_t = data_map[t]["Z_Score_20d"].iloc[-1]
             z_str = f"Z: {z_t:+.2f}" if pd.notna(z_t) else "Z: -"
-            label = "ACIMA" if is_abv else "ABAIXO"
-            subplot_titles_list.append(f"{t} — {label} ({z_str})")
+            label = "ACIMA (Sinal Alta)" if is_abv else "ABAIXO (Sinal Baixa)"
+            inv_tag = " [VIX Inv]" if t in INVERTED_TICKERS else ""
+            subplot_titles_list.append(f"{t}{inv_tag} — {label} ({z_str})")
 
         fig = make_subplots(
             rows=num_rows,
